@@ -45,6 +45,8 @@ if [[ -z "${TIER:-}" || -z "${ENC_NAME:-}" ]]; then
     exit 1
 fi
 
+ENC_NAME=$(basename "$ENC_NAME")
+
 CONFIG_FILE="${CONFIG_FILE:-/etc/pve-b2-age-backup/config.env}"
 if [[ -f "$CONFIG_FILE" ]]; then
     # shellcheck source=/dev/null
@@ -73,6 +75,7 @@ if [[ ! -f "$AGE_IDENTITY" ]]; then
     exit 1
 fi
 
+umask 077
 mkdir -p "$WORKDIR"
 
 local_enc="${WORKDIR}/${ENC_NAME}"

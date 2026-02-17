@@ -82,6 +82,7 @@ if [[ ! -f "$AGE_IDENTITY" ]]; then
 fi
 
 mkdir -p "$WORKDIR"
+umask 077
 restore_dir=$(mktemp -d "${WORKDIR}/pve-hostcfg-restore-XXXXXX")
 trap 'rm -rf "$restore_dir"' EXIT
 
@@ -97,6 +98,8 @@ if [[ -z "$ENC_NAME" ]]; then
     ENC_NAME=$(echo "$files_json" | jq -r 'sort_by(.ModTime) | reverse | .[0].Name')
     echo "Using latest: $ENC_NAME"
 fi
+
+ENC_NAME=$(basename "$ENC_NAME")
 
 local_enc="${restore_dir}/${ENC_NAME}"
 local_plain="${restore_dir}/${ENC_NAME%.age}"
