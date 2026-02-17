@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/LukasStrickler/proxmox-b2-offsite-b
 
 ```bash
 sudo rclone config
-# n (new), name: b2, type: 5 (B2), Account: <Key ID>, Key: <Application Key>, defaults for rest
+# n (new), name: b2, type: 5 (B2), Account: KEY_ID, Key: APPLICATION_KEY, defaults for rest
 ```
 Use the **Application Key ID** as "Account", not the main B2 Account ID.  
 *Tip: When asked about advanced config, set `b2-hard-delete` to `false`.*

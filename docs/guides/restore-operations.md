@@ -14,9 +14,9 @@ How to restore VMs, containers, and host configuration from your encrypted B2 ba
 | Action | Command |
 |--------|---------|
 | **List Backups** | `sudo pve-b2-age-list.sh -v daily` (or `monthly`, `all`, `hostconfig`) |
-| **Restore VM/CT** | `sudo pve-b2-age-restore.sh <tier> <file> <new-vmid>` |
+| **Restore VM/CT** | `sudo pve-b2-age-restore.sh TIER FILE NEW_VMID` |
 | **Restore Host Config** | `sudo pve-b2-age-restore-hostconfig.sh [--extract-to DIR]` |
-| **Verify Backup** | `sudo pve-b2-age-verify.sh <tier> <file>` |
+| **Verify Backup** | `sudo pve-b2-age-verify.sh TIER FILE` |
 
 ## Standard Restore (VM & LXC)
 
@@ -27,7 +27,7 @@ The `pve-b2-age-restore.sh` script handles downloading, decrypting, verifying, a
 Restore a VM or Container to a new ID:
 
 ```bash
-# Syntax: pve-b2-age-restore.sh <tier> <filename> <new-vmid> [storage-id]
+# Syntax: pve-b2-age-restore.sh TIER FILENAME NEW_VMID [STORAGE_ID]
 
 # Example: Restore VM 101 from daily backup to new VM 201
 sudo pve-b2-age-restore.sh daily \
@@ -145,8 +145,8 @@ If scripts are unavailable, perform a manual restore:
 4.  **Verify**: Check file size against `size_bytes` in manifest.
 5.  **Restore**:
     ```bash
-    qmrestore backup.vma.zst <vmid>      # for VMs
-    pct restore <vmid> backup.tar.zst    # for CTs
+    qmrestore BACKUP_FILE.vma.zst VMID      # for VMs
+    pct restore VMID BACKUP_FILE.tar.zst    # for CTs
     ```
 
 ## Troubleshooting

@@ -42,7 +42,7 @@ No manual steps once jobs and timers are enabled.
 |------|---------|
 | List daily/monthly/logs/manifest/hostconfig | **`pve-b2-age-list.sh [tier]`** (e.g. `daily`, `all`, `hostconfig`) |
 | List with download commands | **`pve-b2-age-list.sh -d daily`** |
-| Verify a backup (download, decrypt, check hash) | **`pve-b2-age-verify.sh daily <file.age>`** |
+| Verify a backup (download, decrypt, check hash) | **`pve-b2-age-verify.sh daily FILE.age`** |
 
 ---
 
@@ -51,7 +51,7 @@ No manual steps once jobs and timers are enabled.
 | Step | What | Script |
 |------|------|--------|
 | List backups | See available files | **`pve-b2-age-list.sh daily`** (or `monthly`) |
-| Restore | Download, decrypt, verify, run qmrestore/pct | **`pve-b2-age-restore.sh daily <file.age> <new_vmid> [storage]`** |
+| Restore | Download, decrypt, verify, run qmrestore/pct | **`pve-b2-age-restore.sh daily FILE.age NEW_VMID [storage]`** |
 | Post-restore | Start VM/CT, remove decrypted file when done | Manual |
 
 **Docs:** [Restore Operations](../guides/restore-operations.md)
