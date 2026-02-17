@@ -78,8 +78,10 @@ cd proxmox-b2-offsite-backup
     ```
 
 2.  **Restore Private Key**:
-    *   *From USB*: `cp /mnt/usb/age.key /etc/pve-b2-age-backup/`
-    *   *From B2 (if stored)*: `rclone copyto b2:VAULT/age.key /etc/pve-b2-age-backup/age.key`
+    *   *From USB/Secure Storage*: `cp /mnt/usb/age.key /etc/pve-b2-age-backup/`
+    
+    > ⚠️ **Security Note**: Do NOT store your private age key in B2. Storing the decryption key alongside encrypted backups defeats the purpose of encryption. Keep your private key offline in a secure location (encrypted USB, password manager, or hardware security module).
+    
     *   **Secure Permissions**: `chmod 600 /etc/pve-b2-age-backup/age.key`
 
 3.  **Configure Environment**:

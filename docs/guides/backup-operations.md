@@ -157,8 +157,8 @@ Run via cron to get email alerts on failure.
 LOG="/var/log/pve-b2-age.log"
 EMAIL="YOUR_EMAIL"
 
-# Count errors in last 24h
-ERRORS=$(grep "ERROR" "$LOG" | grep "$(date -d '1 day ago' +%Y-%m-%d)" | wc -l)
+# Count errors in last 24h (including today)
+ERRORS=$(grep "ERROR" "$LOG" | grep -E "$(date -d '1 day ago' +%Y-%m-%d)|$(date +%Y-%m-%d)" | wc -l)
 
 if [[ $ERRORS -gt 0 ]]; then
     echo "Backup errors: $ERRORS" | mail -s "Backup Alert: $(hostname)" "$EMAIL"

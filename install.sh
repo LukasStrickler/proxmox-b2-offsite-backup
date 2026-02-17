@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # PVE B2 Age Backup - One-Line Installer
@@ -250,7 +250,7 @@ generate_age_key() {
         chmod 600 "$key_file"
         
         grep -oE 'age1[0-9a-z]+' "$key_file" > "$recipients_file"
-        chmod 600 "$recipients_file"
+        chmod 644 "$recipients_file"
         
         info ""
         log "Age key generated successfully!"

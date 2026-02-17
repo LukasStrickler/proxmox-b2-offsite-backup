@@ -74,12 +74,14 @@ format_bytes() {
     local bytes=$1
     if command -v numfmt >/dev/null 2>&1; then
         numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null || echo "${bytes}B"
-    else
+    elif command -v bc >/dev/null 2>&1; then
         if (( bytes > 1099511627776 )); then printf "%.2f TiB" "$(echo "$bytes / 1099511627776" | bc -l)"
         elif (( bytes > 1073741824 )); then printf "%.2f GiB" "$(echo "$bytes / 1073741824" | bc -l)"
         elif (( bytes > 1048576 )); then printf "%.2f MiB" "$(echo "$bytes / 1048576" | bc -l)"
         elif (( bytes > 1024 )); then printf "%.2f KiB" "$(echo "$bytes / 1024" | bc -l)"
         else echo "${bytes}B"; fi
+    else
+        echo "${bytes}B"
     fi
 }
 
