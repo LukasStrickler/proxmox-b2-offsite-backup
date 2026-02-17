@@ -19,7 +19,7 @@ A **backup hook** for Proxmox VE: when a backup finishes, Proxmox runs our scrip
 
 | | |
 |:---|:---|
-| **Streaming encryption** | No plaintext left on disk |
+| **Streaming encryption** | No plaintext persists on disk |
 | **SHA256 verification** | Manifest-based integrity checks |
 | **Flexible retention** | N daily + monthly copies |
 | **Systemd integration** | Prune and hostconfig timers |

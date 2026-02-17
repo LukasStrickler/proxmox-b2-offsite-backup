@@ -93,6 +93,7 @@ if [[ ! -f "$AGE_IDENTITY" ]]; then
 fi
 
 # Create work directory
+umask 077
 mkdir -p "$WORKDIR"
 
 local_enc="${WORKDIR}/${ENC_NAME}"
