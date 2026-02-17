@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily prune for PVE B2 Age Backups
+Documentation=https://github.com/LukasStrickler/proxmox-b2-offsite-backup
+
+[Timer]
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

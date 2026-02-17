@@ -1,0 +1,18 @@
+[Unit]
+Description=PVE B2 Age Backup Prune
+Documentation=https://github.com/LukasStrickler/proxmox-b2-offsite-backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pve-b2-age-prune.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pve-b2-age-prune
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log /run/lock
+ReadOnlyPaths=/etc/pve-b2-age-backup
