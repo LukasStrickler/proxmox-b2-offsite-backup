@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📚 Documentation
+    url: https://github.com/LukasStrickler/proxmox-b2-offsite-backup#documentation
+    about: Check the documentation before opening an issue
+  - name: 💬 GitHub Discussions
+    url: https://github.com/LukasStrickler/proxmox-b2-offsite-backup/discussions
+    about: Ask questions and discuss with the community
+  - name: 🔒 Report Security Vulnerability
+    url: mailto:lukasstrickler@icloud.com
+    about: Please report security issues privately via email
