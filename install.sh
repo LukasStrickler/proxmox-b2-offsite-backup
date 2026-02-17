@@ -51,9 +51,9 @@ check_root() {
 
 # Check Proxmox VE
 check_proxmox() {
-    if [[ ! -f /etc/pve/pve.cfg ]]; then
+    if ! command -v pveversion >/dev/null 2>&1; then
         error "This doesn't appear to be a Proxmox VE server"
-        error "Missing: /etc/pve/pve.cfg"
+        error "Missing: pveversion command"
         error ""
         error "This backup solution is designed specifically for Proxmox VE."
         read -rp "Continue anyway? [y/N]: " response

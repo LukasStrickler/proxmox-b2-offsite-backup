@@ -13,6 +13,6 @@ SyslogIdentifier=pve-b2-age-hostconfig
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ReadWritePaths=/var/log /var/tmp /run/lock
 ReadOnlyPaths=/etc /var/lib/pve-cluster /root /etc/pve-b2-age-backup

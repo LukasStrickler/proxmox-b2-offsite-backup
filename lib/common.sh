@@ -46,7 +46,7 @@ retry_with_backoff() {
         
         # We use 'bash -c' here because the command might be a complex string with pipes
         # and we want it to run in its own shell environment.
-        if bash -c "$cmd" >>"${LOG:-/dev/null}" 2>&1; then
+        if bash -c "set -o pipefail; $cmd" >>"${LOG:-/dev/null}" 2>&1; then
             return 0
         fi
         

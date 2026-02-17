@@ -77,102 +77,106 @@ upload_encrypted_stream() {
     retry_with_backoff "$rclone_cmd" "${UPLOAD_ATTEMPTS:-6}" "${BASE_BACKOFF:-20}"
 }
 
-case "$PHASE" in
-    backup-start)
-        if staging_busy; then
-            log "ERROR: Staging busy — another backup file already in $DUMPDIR (upload in progress or leftover). Only one backup at a time; schedule jobs so the next starts after the previous has finished and space is freed."
-            exit 1
-        fi
-        log "Backup started for VM/CT $VMID"
-        ;;
-        
-    backup-end)
-        # TARGET exists only at backup-end
-        SRC="${TARGET:-${TARFILE:-}}"
-        if [[ -z "$SRC" || ! -f "$SRC" ]]; then
-            log "ERROR: TARGET/TARFILE missing or not a file: '${SRC:-<unset>}'"
-            exit 1
-        fi
-        
-        local base_filename
-        base_filename=$(basename "$SRC")
-        local daily_object="${REMOTE_DAILY}/${base_filename}.age"
-        
-        # Get file info for manifest
-        local size_bytes sha256_hash created_date
-        size_bytes=$(stat -c '%s' "$SRC")
-        sha256_hash=$(sha256sum "$SRC" | awk '{print $1}')
-        created_date=$(date -Is)
-        
-        # Create manifest (for integrity verification during restore)
-        local manifest_temp
-        manifest_temp=$(mktemp)
-        # shellcheck disable=SC2064
-        trap "rm -f '$manifest_temp'" EXIT
-        
-        jq -n \
-            --arg vmid "$VMID" \
-            --arg host "$HOST" \
-            --arg file "$base_filename" \
-            --argjson size_bytes "$size_bytes" \
-            --arg sha256 "$sha256_hash" \
-            --arg created "$created_date" \
-            --arg mode "$MODE" \
-            '{vmid: $vmid, host: $host, file: $file, size_bytes: $size_bytes, sha256: $sha256, created: $created, mode: $mode}' > "$manifest_temp"
-        
-        local manifest_object="${REMOTE_MANIFEST}/${base_filename}.json.age"
-        
-        log "Starting encrypted upload: $base_filename (${size_bytes} bytes)"
-        
-        if upload_encrypted_stream "$SRC" "$daily_object"; then
-            log "Backup upload successful: $base_filename"
+main() {
+    case "$PHASE" in
+        backup-start)
+            if staging_busy; then
+                log "ERROR: Staging busy — another backup file already in $DUMPDIR (upload in progress or leftover). Only one backup at a time; schedule jobs so the next starts after the previous has finished and space is freed."
+                exit 1
+            fi
+            log "Backup started for VM/CT $VMID"
+            ;;
             
-            # Upload manifest
-            if upload_encrypted_stream "$manifest_temp" "$manifest_object"; then
-                log "Manifest upload successful"
+        backup-end)
+            # TARGET exists only at backup-end
+            SRC="${TARGET:-${TARFILE:-}}"
+            if [[ -z "$SRC" || ! -f "$SRC" ]]; then
+                log "ERROR: TARGET/TARFILE missing or not a file: '${SRC:-<unset>}'"
+                exit 1
+            fi
+            
+            local base_filename
+            base_filename=$(basename "$SRC")
+            local daily_object="${REMOTE_DAILY}/${base_filename}.age"
+            
+            # Get file info for manifest
+            local size_bytes sha256_hash created_date
+            size_bytes=$(stat -c '%s' "$SRC")
+            sha256_hash=$(sha256sum "$SRC" | awk '{print $1}')
+            created_date=$(date -Is)
+            
+            # Create manifest (for integrity verification during restore)
+            local manifest_temp
+            manifest_temp=$(mktemp)
+            # shellcheck disable=SC2064
+            trap "rm -f '$manifest_temp'" EXIT
+            
+            jq -n \
+                --arg vmid "$VMID" \
+                --arg host "$HOST" \
+                --arg file "$base_filename" \
+                --argjson size_bytes "$size_bytes" \
+                --arg sha256 "$sha256_hash" \
+                --arg created "$created_date" \
+                --arg mode "$MODE" \
+                '{vmid: $vmid, host: $host, file: $file, size_bytes: $size_bytes, sha256: $sha256, created: $created, mode: $mode}' > "$manifest_temp"
+            
+            local manifest_object="${REMOTE_MANIFEST}/${base_filename}.json.age"
+            
+            log "Starting encrypted upload: $base_filename (${size_bytes} bytes)"
+            
+            if upload_encrypted_stream "$SRC" "$daily_object"; then
+                log "Backup upload successful: $base_filename"
+                
+                # Upload manifest
+                if upload_encrypted_stream "$manifest_temp" "$manifest_object"; then
+                    log "Manifest upload successful"
+                else
+                    log "WARN: Manifest upload failed (backup is safe)"
+                fi
+                
+                # Delete local plaintext only after successful upload
+                rm -f -- "$SRC"
+                log "Deleted local plaintext backup: $SRC"
+                
+                if [[ "${ENABLE_MONTHLY:-true}" == "true" && "$(date +%d)" == "01" ]]; then
+                    local monthly_object="${REMOTE_MONTHLY}/${base_filename}.age"
+                    log "Creating monthly copy..."
+                    rclone copyto --fast-list --transfers 4 --checkers 8 \
+                        "$(sanitize_path "$daily_object")" \
+                        "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1 || \
+                        log "WARN: Monthly copy failed"
+                fi
+                
+                log "Backup completed successfully for VM/CT $VMID"
             else
-                log "WARN: Manifest upload failed (backup is safe)"
+                log "ERROR: Upload failed, keeping local plaintext: $SRC"
+                exit 1
             fi
+            ;;
             
-            # Delete local plaintext only after successful upload
-            rm -f -- "$SRC"
-            log "Deleted local plaintext backup: $SRC"
-            
-            if [[ "${ENABLE_MONTHLY:-true}" == "true" && "$(date +%d)" == "01" ]]; then
-                local monthly_object="${REMOTE_MONTHLY}/${base_filename}.age"
-                log "Creating monthly copy..."
-                rclone copyto --fast-list --transfers 4 --checkers 8 \
-                    "$(sanitize_path "$daily_object")" \
-                    "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1 || \
-                    log "WARN: Monthly copy failed"
+        log-end)
+            # LOGFILE exists only at log-end
+            LF="${LOGFILE:-}"
+            if [[ -n "$LF" && -f "$LF" ]]; then
+                local log_basename
+                log_basename=$(basename "$LF")
+                local log_object="${REMOTE_LOGS}/${log_basename}.age"
+                log "Uploading vzdump log: $log_basename"
+                upload_encrypted_stream "$LF" "$log_object" || log "WARN: Log upload failed"
             fi
+            ;;
             
-            log "Backup completed successfully for VM/CT $VMID"
-        else
-            log "ERROR: Upload failed, keeping local plaintext: $SRC"
-            exit 1
-        fi
-        ;;
-        
-    log-end)
-        # LOGFILE exists only at log-end
-        LF="${LOGFILE:-}"
-        if [[ -n "$LF" && -f "$LF" ]]; then
-            local log_basename
-            log_basename=$(basename "$LF")
-            local log_object="${REMOTE_LOGS}/${log_basename}.age"
-            log "Uploading vzdump log: $log_basename"
-            upload_encrypted_stream "$LF" "$log_object" || log "WARN: Log upload failed"
-        fi
-        ;;
-        
-    backup-abort)
-        log "Backup aborted for VM/CT $VMID"
-        ;;
-        
-    *)
-        log "Unknown phase: $PHASE"
-        ;;
-esac
+        backup-abort)
+            log "Backup aborted for VM/CT $VMID"
+            ;;
+            
+        *)
+            log "Unknown phase: $PHASE"
+            ;;
+    esac
+}
+
+main "$@"
 
 exit 0
