@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/../lib/common.sh" 2>/dev/null || source "/usr/local/lib/pv
 
 show_usage() {
     cat <<'EOF'
-Usage: pve-b2-age-verify.sh [options] <tier> <encrypted_backup>
+Usage: pve-b2-age-verify.sh [options] <TIER> <ENCRYPTED_BACKUP>
 
 Verify integrity of an encrypted backup without full restore.
 Decrypts and checks SHA256 hash against manifest.
@@ -47,16 +47,8 @@ fi
 
 ENC_NAME=$(basename "$ENC_NAME")
 
-CONFIG_FILE="${CONFIG_FILE:-/etc/pve-b2-age-backup/config.env}"
-if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE"
-else
-    echo "ERROR: Configuration file not found: $CONFIG_FILE" >&2
-    exit 1
-fi
-
-: "${RCLONE_REMOTE:?}" "${AGE_IDENTITY:?}"
+load_config || exit 1
+validate_config "RCLONE_REMOTE" "AGE_IDENTITY" || exit 1
 
 HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
@@ -71,7 +63,7 @@ need jq
 need sha256sum
 
 if [[ ! -f "$AGE_IDENTITY" ]]; then
-    log "ERROR: Age identity not found: $AGE_IDENTITY"
+    log "ERROR: Age identity file not found: $AGE_IDENTITY"
     exit 1
 fi
 

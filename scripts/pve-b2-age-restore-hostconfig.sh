@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # pve-b2-age-restore-hostconfig.sh - Download and decrypt host config backup from B2
-# Usage: pve-b2-age-restore-hostconfig.sh [--host HOST] [--extract-to DIR] [filename.age]
+# Usage: pve-b2-age-restore-hostconfig.sh [--host HOST] [--extract-to DIR] [FILENAME.age]
 # If filename is omitted, restores the latest backup by modification time.
 
 # Source shared functions
@@ -12,7 +12,7 @@ source "${SCRIPT_DIR}/../lib/common.sh" 2>/dev/null || source "/usr/local/lib/pv
 
 show_usage() {
     cat <<'EOF'
-Usage: pve-b2-age-restore-hostconfig.sh [options] [filename.age]
+Usage: pve-b2-age-restore-hostconfig.sh [options] [FILENAME.age]
 
 Download and decrypt a host configuration backup from B2.
 If filename is omitted, the latest backup (by modification time) is used.
@@ -23,7 +23,7 @@ Options:
   --extract-to DIR   After decrypting, extract the tarball into DIR (optional)
 
 Arguments:
-  filename.age       Encrypted backup file (e.g. pve-hostcfg-pve1-2026_02_17-12_00_00.tar.zst.age)
+  FILENAME.age       Encrypted backup file (e.g. pve-hostcfg-pve1-2026_02_17-12_00_00.tar.zst.age)
                      Omit to use the latest backup.
 
 Examples:
@@ -53,16 +53,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-CONFIG_FILE="${CONFIG_FILE:-/etc/pve-b2-age-backup/config.env}"
-if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE"
-else
-    echo "ERROR: Configuration file not found: $CONFIG_FILE" >&2
-    exit 1
-fi
-
-: "${RCLONE_REMOTE:?}" "${AGE_IDENTITY:?}"
+load_config || exit 1
+validate_config "RCLONE_REMOTE" "AGE_IDENTITY" || exit 1
 
 HOST="${HOST:-$(hostname -s)}"
 SEARCH_HOST="${HOST_FILTER:-$HOST}"
@@ -74,10 +66,10 @@ LOG="${LOG:-/var/log/pve-b2-age.log}"
 need rclone
 need age
 need jq
+need tar
 
 if [[ ! -f "$AGE_IDENTITY" ]]; then
-    echo "ERROR: Age identity file not found: $AGE_IDENTITY" >&2
-    echo "The private key is required for decryption." >&2
+    log "ERROR: Age identity file not found: $AGE_IDENTITY"
     exit 1
 fi
 
@@ -125,7 +117,7 @@ if [[ -n "$EXTRACT_TO" ]]; then
     tar -xaf "$local_plain" -C "$EXTRACT_TO"
     echo "Extracted. Review files under $EXTRACT_TO and copy what you need (e.g. etc/network/interfaces)."
 else
-    echo "To extract: tar -xaf $local_plain -C /path/to/dir"
+    echo "To extract: tar -xaf $local_plain -C /EXTRACT_TARGET_DIR"
     echo "To extract specific files: tar -xaf $local_plain -C /tmp/restore etc/network/interfaces"
 fi
 

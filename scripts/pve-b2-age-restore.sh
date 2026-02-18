@@ -2,7 +2,6 @@
 set -euo pipefail
 
 # pve-b2-age-restore.sh - Restore VMs/CTs from encrypted B2 backups
-# Usage: pve-b2-age-restore.sh <daily|monthly> <encrypted_filename.age> <new_vmid> [storage]
 
 # Source shared functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,7 +10,7 @@ source "${SCRIPT_DIR}/../lib/common.sh" 2>/dev/null || source "/usr/local/lib/pv
 
 show_usage() {
     cat <<'EOF'
-Usage: pve-b2-age-restore.sh <tier> <encrypted_backup> <new_vmid> [storage]
+Usage: pve-b2-age-restore.sh <TIER> <ENCRYPTED_BACKUP> <NEW_VMID> [STORAGE]
 
 Arguments:
   tier            - "daily" or "monthly" (which backup tier to restore from)
@@ -49,24 +48,23 @@ ENC_NAME="$2"
 NEW_ID="$3"
 STORAGE="${4:-}"
 
+if ! [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: NEW_ID must be a positive integer, got: $NEW_ID" >&2
+    exit 1
+fi
+if (( 10#$NEW_ID < 1 || 10#$NEW_ID > 999999999 )); then
+    echo "ERROR: NEW_ID must be between 1 and 999999999, got: $NEW_ID" >&2
+    exit 1
+fi
+
 # Validate tier
 if [[ "$TIER" != "daily" && "$TIER" != "monthly" ]]; then
     echo "ERROR: Tier must be 'daily' or 'monthly'" >&2
     exit 1
 fi
 
-# Load configuration
-CONFIG_FILE="${CONFIG_FILE:-/etc/pve-b2-age-backup/config.env}"
-if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE"
-else
-    echo "ERROR: Configuration file not found: $CONFIG_FILE" >&2
-    exit 1
-fi
-
-# Validate required configuration
-: "${RCLONE_REMOTE:?}" "${AGE_IDENTITY:?}"
+load_config || exit 1
+validate_config "RCLONE_REMOTE" "AGE_IDENTITY" || exit 1
 
 HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
@@ -84,11 +82,8 @@ need qm
 need qmrestore
 need pct
 
-# Verify age identity exists
 if [[ ! -f "$AGE_IDENTITY" ]]; then
     log "ERROR: Age identity file not found: $AGE_IDENTITY"
-    log "The private key is required for decryption."
-    log "If it's stored offline, copy it to this host temporarily."
     exit 1
 fi
 
@@ -163,6 +158,14 @@ original_vmid=$(jq -r '.vmid' "$manifest_plain")
 original_host=$(jq -r '.host' "$manifest_plain")
 backup_file=$(jq -r '.file' "$manifest_plain")
 created_date=$(jq -r '.created' "$manifest_plain")
+
+if [[ -n "$backup_file" && "$backup_file" != "${ENC_NAME%.age}" ]]; then
+    log "ERROR: Manifest file mismatch!"
+    log "  Requested: ${ENC_NAME%.age}"
+    log "  Manifest says: $backup_file"
+    log "  This may indicate a corrupted or mismatched manifest."
+    exit 1
+fi
 
 log "Manifest info:"
 log "  Original VMID: $original_vmid"
