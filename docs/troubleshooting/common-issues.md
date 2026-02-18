@@ -62,11 +62,21 @@ sudo chmod 644 /etc/pve-b2-age-backup/recipients.txt
 **Fix**:
 ```bash
 # Test connection
-sudo rclone lsf b2:$(grep RCLONE_REMOTE /etc/pve-b2-age-backup/config.env | cut -d: -f3)
+sudo bash -lc 'source /etc/pve-b2-age-backup/config.env && rclone lsf "$RCLONE_REMOTE"'
 
 # Reconfigure if needed
 sudo rclone config
 ```
+
+### "Manifest upload failed" (Integrity metadata missing)
+**Problem**: Backup data upload succeeded, but manifest upload failed. The hook keeps the local plaintext backup file in `DUMPDIR` to avoid data loss.
+**Fix**:
+1. Verify the encrypted backup object exists in B2 (`daily/` tier for the host).
+2. Re-run the backup for that VM/CT to regenerate both backup and manifest.
+3. After you confirm a good backup exists remotely, remove the retained local staging file to free space:
+   ```bash
+   sudo rm -f /backup/vzdump/vzdump-qemu-* /backup/vzdump/vzdump-lxc-*
+   ```
 
 ### "TARGET/TARFILE missing" (Hook Logic)
 **Problem**: The hook script ran, but Proxmox didn't provide a backup file.
@@ -124,7 +134,7 @@ sudo rm -f /run/lock/pve-b2-age-hook.lock
    ```
 2. **Check Header**: Verify the file is actually age-encrypted.
    ```bash
-   sudo rclone cat b2:BUCKET/path/to/backup.age | head -c 100
+   sudo rclone cat b2:BUCKET/REMOTE_PATH/BACKUP_FILENAME.age | head -c 100
    # Should start with "age-encryption.org"
    ```
 
@@ -133,7 +143,7 @@ sudo rm -f /run/lock/pve-b2-age-hook.lock
 **Fix**:
 - **Option A**: Restore to a new ID:
   ```bash
-  pve-b2-age-restore.sh daily backup-name.age 999
+  pve-b2-age-restore.sh daily BACKUP_FILENAME.age 999
   ```
 - **Option B**: Destroy the old VM first (DANGEROUS):
   ```bash
@@ -296,9 +306,9 @@ touch /tmp/test-backup.tar.zst
 # Run hook manually
 sudo TARGET=/tmp/test-backup.tar.zst \
      STOREID=local \
-     VMID=999 \
-     /usr/local/sbin/pve-b2-age-hook.sh backup-end snapshot
+     /usr/local/sbin/pve-b2-age-hook.sh backup-end snapshot 999
 ```
+If upload and manifest succeed, the script deletes `/tmp/test-backup.tar.zst` after processing.
 
 ### 3. Generate Debug Report
 Run this command to dump relevant system state to a file for sharing (scrub secrets!):

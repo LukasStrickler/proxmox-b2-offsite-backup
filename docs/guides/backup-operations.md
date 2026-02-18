@@ -123,10 +123,10 @@ sudo vzdump 101 --storage backup-vzdump --mode snapshot --mailto YOUR_EMAIL
 Verify the hook logic without running a full backup.
 
 ```bash
-# Validate hook syntax and environment
-sudo /usr/local/sbin/pve-b2-age-hook.sh backup-end snapshot 101
+# Validate hook syntax
+sudo bash -n /usr/local/sbin/pve-b2-age-hook.sh
 ```
-*Note: This will log an error about missing TARGET/LOGFILE variables, which is expected during a dry run.*
+*For a runtime simulation, use the manual hook test in [Troubleshooting](../troubleshooting/common-issues.md#2-manual-hook-test).*
 
 ## Troubleshooting
 

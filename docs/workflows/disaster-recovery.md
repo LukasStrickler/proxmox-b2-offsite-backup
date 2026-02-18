@@ -204,7 +204,7 @@ Once the system is stable, re-enable the backup schedule.
 3.  **Clean Install**: Do not trust the infected OS. Reinstall Proxmox from ISO.
 4.  **Verify Backup**: Restore a VM to an isolated network. Check for encryption/ransom notes before reconnecting to production.
     ```bash
-    # Verify signature before restore
+    # Verify hash before restore
     pve-b2-age-verify.sh daily BACKUP_FILE
     ```
 
