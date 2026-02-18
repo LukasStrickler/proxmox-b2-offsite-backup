@@ -20,6 +20,15 @@ load_config || exit 1
 # Validate required configuration
 validate_config "RCLONE_REMOTE" "DUMPDIR" "AGE_RECIPIENTS" || exit 1
 
+if [[ ! -f "$AGE_RECIPIENTS" ]]; then
+    log "ERROR: Age recipients file not found: $AGE_RECIPIENTS"
+    exit 1
+fi
+if [[ ! -r "$AGE_RECIPIENTS" ]]; then
+    log "ERROR: Age recipients file not readable: $AGE_RECIPIENTS"
+    exit 1
+fi
+
 HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
 REMOTE_DAILY="${REMOTE_BASE}/daily"
@@ -129,15 +138,21 @@ main() {
                 log "Backup upload successful: $base_filename"
                 
                 # Upload manifest
+                local manifest_ok=false
                 if upload_encrypted_stream "$manifest_temp" "$manifest_object"; then
                     log "Manifest upload successful"
+                    manifest_ok=true
                 else
-                    log "WARN: Manifest upload failed (backup is safe)"
+                    log "ERROR: Manifest upload failed (backup data is safe in B2, but integrity verification will not be possible)"
                 fi
                 
-                # Delete local plaintext only after successful upload
-                rm -f -- "$SRC"
-                log "Deleted local plaintext backup: $SRC"
+                if [[ "$manifest_ok" == "true" ]]; then
+                    rm -f -- "$SRC"
+                    log "Deleted local plaintext backup: $SRC"
+                else
+                    log "WARNING: Keeping local plaintext due to manifest failure: $SRC"
+                    log "WARNING: Re-run backup or manually delete after verifying remote backup"
+                fi
                 
                 if [[ "${ENABLE_MONTHLY:-true}" == "true" && "$(date +%d)" == "01" ]]; then
                     local monthly_object="${REMOTE_MONTHLY}/${base_filename}.age"
@@ -169,10 +184,18 @@ main() {
             
         backup-abort)
             log "Backup aborted for VM/CT $VMID"
+            if [[ -n "$VMID" && -n "${DUMPDIR:-}" ]]; then
+                shopt -s nullglob
+                for f in "$DUMPDIR"/vzdump-*"-$VMID-"*; do
+                    log "Cleaning up aborted staging file: $f"
+                    rm -f "$f" 2>/dev/null || true
+                done
+                shopt -u nullglob
+            fi
             ;;
             
         *)
-            log "Unknown phase: $PHASE"
+            log "WARNING: Unknown phase: $PHASE (may indicate Proxmox version incompatibility)"
             ;;
     esac
 }

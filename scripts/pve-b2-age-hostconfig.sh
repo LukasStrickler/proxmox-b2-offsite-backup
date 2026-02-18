@@ -22,16 +22,13 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     exit 0
 fi
 
-CONFIG_FILE="${CONFIG_FILE:-/etc/pve-b2-age-backup/config.env}"
-if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE"
-else
-    echo "ERROR: Configuration file not found: $CONFIG_FILE" >&2
+load_config || exit 1
+validate_config "RCLONE_REMOTE" "AGE_RECIPIENTS" || exit 1
+
+if [[ ! -f "$AGE_RECIPIENTS" ]]; then
+    log "ERROR: Age recipients file not found: $AGE_RECIPIENTS"
     exit 1
 fi
-
-: "${RCLONE_REMOTE:?}" "${AGE_RECIPIENTS:?}"
 
 HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"

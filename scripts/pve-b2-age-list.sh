@@ -52,16 +52,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-CONFIG_FILE="${CONFIG_FILE:-/etc/pve-b2-age-backup/config.env}"
-if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE"
-else
-    echo "ERROR: Configuration file not found: $CONFIG_FILE" >&2
-    exit 1
-fi
+load_config || exit 1
 
-: "${RCLONE_REMOTE:?}"
+validate_config "RCLONE_REMOTE" || exit 1
 
 HOST="${HOST:-$(hostname -s)}"
 SEARCH_HOST="${HOST_FILTER:-$HOST}"
