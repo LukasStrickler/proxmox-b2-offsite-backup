@@ -48,6 +48,28 @@ sudo pve-b2-age-check.sh
 
 → [Quick Start Guide](docs/guides/quickstart.md)
 
+## Uninstall
+
+To remove PVE B2 Age Backup from your system:
+
+```bash
+sudo /opt/pve-b2-age-backup/uninstall.sh
+# or if cloned from git:
+sudo ./uninstall.sh
+```
+
+**What gets removed:**
+- Scripts in `/usr/local/sbin/`
+- Systemd units and timers
+- Install directory `/opt/pve-b2-age-backup/`
+- Runtime logs
+
+**What is preserved:**
+- Configuration in `/etc/pve-b2-age-backup/` (including encryption keys)
+- Backups in B2
+
+**Important:** After uninstalling, remove the hook script path from your Proxmox backup jobs (Datacenter → Backup → edit each job) to prevent backup failures.
+
 ## Requirements
 
 | Requirement | Details |

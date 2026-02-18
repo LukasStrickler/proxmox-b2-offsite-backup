@@ -20,12 +20,50 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Installation state for rollback
+declare -a INSTALLED_FILES=()
+CONFIG_FILE_CREATED=false
+CONFIG_DIR_CREATED=false
+KEYS_GENERATED=false
+
 # Logging functions
 log() { echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $*" | tee -a "$LOG_FILE"; }
 info() { echo -e "${BLUE}[INFO]${NC} $*" | tee -a "$LOG_FILE"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*" | tee -a "$LOG_FILE"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" | tee -a "$LOG_FILE" >&2; }
 fail() { error "$*"; exit 1; }
+
+track_installed_if_new() {
+    local path="$1"
+    local existed_before="$2"
+    if [[ "$existed_before" == "false" ]]; then
+        INSTALLED_FILES+=("$path")
+    fi
+}
+
+download_to_path() {
+    local url="$1"
+    local dst="$2"
+    local mode="${3:-}"
+    local tmp="${dst}.tmp.$$"
+    if ! curl -fsSL "$url" -o "$tmp"; then
+        rm -f "$tmp" 2>/dev/null || true
+        return 1
+    fi
+    if [[ -n "$mode" ]]; then
+        chmod "$mode" "$tmp"
+    fi
+    mv -f "$tmp" "$dst"
+}
+
+install_to_path() {
+    local mode="$1"
+    local src="$2"
+    local dst="$3"
+    local tmp="${dst}.tmp.$$"
+    install -m "$mode" "$src" "$tmp"
+    mv -f "$tmp" "$dst"
+}
 
 # Print banner
 print_banner() {
@@ -145,14 +183,22 @@ download_scripts() {
     
     for script in "${scripts[@]}"; do
         local filename
+        local dst
+        local existed_before=false
         filename=$(basename "$script")
+        dst="${INSTALL_DIR}/${script}"
+        [[ -e "$dst" ]] && existed_before=true
         info "  Downloading: $filename"
-        curl -fsSL "${REPO_RAW}/${script}" -o "${INSTALL_DIR}/${script}"
-        chmod 700 "${INSTALL_DIR}/${script}"
+        download_to_path "${REPO_RAW}/${script}" "$dst" 700
+        track_installed_if_new "$dst" "$existed_before"
     done
     
     info "  Downloading: lib/common.sh"
-    curl -fsSL "${REPO_RAW}/lib/common.sh" -o "${INSTALL_DIR}/lib/common.sh"
+    local lib_dst="${INSTALL_DIR}/lib/common.sh"
+    local lib_existed_before=false
+    [[ -e "$lib_dst" ]] && lib_existed_before=true
+    download_to_path "${REPO_RAW}/lib/common.sh" "$lib_dst"
+    track_installed_if_new "$lib_dst" "$lib_existed_before"
     
     local units=(
         "systemd/pve-b2-age-prune.service"
@@ -163,13 +209,29 @@ download_scripts() {
     
     for unit in "${units[@]}"; do
         local filename
+        local dst
+        local existed_before=false
         filename=$(basename "$unit")
+        dst="${INSTALL_DIR}/${unit}"
+        [[ -e "$dst" ]] && existed_before=true
         info "  Downloading: $filename"
-        curl -fsSL "${REPO_RAW}/${unit}" -o "${INSTALL_DIR}/${unit}"
+        download_to_path "${REPO_RAW}/${unit}" "$dst"
+        track_installed_if_new "$dst" "$existed_before"
     done
     
     info "  Downloading: .env.example"
-    curl -fsSL "${REPO_RAW}/.env.example" -o "${INSTALL_DIR}/.env.example"
+    local env_dst="${INSTALL_DIR}/.env.example"
+    local env_existed_before=false
+    [[ -e "$env_dst" ]] && env_existed_before=true
+    download_to_path "${REPO_RAW}/.env.example" "$env_dst"
+    track_installed_if_new "$env_dst" "$env_existed_before"
+
+    info "  Downloading: uninstall.sh"
+    local uninstall_dst="${INSTALL_DIR}/uninstall.sh"
+    local uninstall_existed_before=false
+    [[ -e "$uninstall_dst" ]] && uninstall_existed_before=true
+    download_to_path "${REPO_RAW}/uninstall.sh" "$uninstall_dst" 700
+    track_installed_if_new "$uninstall_dst" "$uninstall_existed_before"
     
     log "All files downloaded to $INSTALL_DIR"
 }
@@ -179,14 +241,24 @@ install_scripts() {
     info "Installing scripts to $BIN_DIR..."
     
     for script in "$INSTALL_DIR"/scripts/*.sh; do
-        local filename=$(basename "$script")
-        install -m 700 "$script" "${BIN_DIR}/${filename}"
+        local filename
+        local dst
+        local existed_before=false
+        filename=$(basename "$script")
+        dst="${BIN_DIR}/${filename}"
+        [[ -e "$dst" ]] && existed_before=true
+        install_to_path 700 "$script" "$dst"
+        track_installed_if_new "$dst" "$existed_before"
         log "  Installed: $filename"
     done
     
     info "Installing shared library..."
     mkdir -p /usr/local/lib/pve-b2-age
-    install -m 644 "$INSTALL_DIR/lib/common.sh" /usr/local/lib/pve-b2-age/common.sh
+    local common_dst="/usr/local/lib/pve-b2-age/common.sh"
+    local common_existed_before=false
+    [[ -e "$common_dst" ]] && common_existed_before=true
+    install_to_path 644 "$INSTALL_DIR/lib/common.sh" "$common_dst"
+    track_installed_if_new "$common_dst" "$common_existed_before"
     log "  Installed: /usr/local/lib/pve-b2-age/common.sh"
 }
 
@@ -196,8 +268,14 @@ install_systemd() {
     
     for unit in "$INSTALL_DIR"/systemd/*.{service,timer}; do
         [[ -f "$unit" ]] || continue
-        local filename=$(basename "$unit")
-        install -m 644 "$unit" "${SYSTEMD_DIR}/${filename}"
+        local filename
+        local dst
+        local existed_before=false
+        filename=$(basename "$unit")
+        dst="${SYSTEMD_DIR}/${filename}"
+        [[ -e "$dst" ]] && existed_before=true
+        install_to_path 644 "$unit" "$dst"
+        track_installed_if_new "$dst" "$existed_before"
         log "  Installed: $filename"
     done
     
@@ -208,19 +286,22 @@ install_systemd() {
 # Setup configuration directory
 setup_config() {
     info "Setting up configuration..."
+    if [[ ! -d "$CONFIG_DIR" ]]; then
+        CONFIG_DIR_CREATED=true
+    fi
     
     mkdir -p "$CONFIG_DIR"
     chmod 700 "$CONFIG_DIR"
     
     if [[ ! -f "${CONFIG_DIR}/config.env" ]]; then
         info "Creating initial configuration"
-        install -m 600 "$INSTALL_DIR/.env.example" "${CONFIG_DIR}/config.env"
+        install_to_path 600 "$INSTALL_DIR/.env.example" "${CONFIG_DIR}/config.env"
         log "  Created: ${CONFIG_DIR}/config.env"
-        CONFIG_CREATED=true
+        CONFIG_FILE_CREATED=true
     else
         log "Configuration already exists: ${CONFIG_DIR}/config.env"
         warn "Review for new options: diff ${CONFIG_DIR}/config.env ${INSTALL_DIR}/.env.example"
-        CONFIG_CREATED=false
+        CONFIG_FILE_CREATED=false
     fi
 }
 
@@ -251,6 +332,7 @@ generate_age_key() {
         
         grep -oE 'age1[0-9a-z]+' "$key_file" > "$recipients_file"
         chmod 644 "$recipients_file"
+        KEYS_GENERATED=true
         
         info ""
         log "Age key generated successfully!"
@@ -266,6 +348,38 @@ generate_age_key() {
         warn "You must manually create ${CONFIG_DIR}/recipients.txt with your public key(s)"
     fi
 }
+
+# Rollback on failure
+rollback() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        error "Installation failed (exit code: $exit_code). Rolling back..."
+
+        for f in "${INSTALLED_FILES[@]}"; do
+            rm -f "$f" 2>/dev/null || true
+        done
+
+        systemctl daemon-reload 2>/dev/null || true
+
+        if [[ "$KEYS_GENERATED" == "true" ]]; then
+            warn "Removing generated age keys..."
+            rm -f "${CONFIG_DIR}/age.key" "${CONFIG_DIR}/recipients.txt" 2>/dev/null || true
+        fi
+
+        if [[ "$CONFIG_FILE_CREATED" == "true" ]]; then
+            rm -f "${CONFIG_DIR}/config.env" 2>/dev/null || true
+        fi
+
+        if [[ "$CONFIG_DIR_CREATED" == "true" ]]; then
+            warn "Removing created configuration directory..."
+            rm -rf "$CONFIG_DIR"
+        fi
+
+        error "Rollback complete. Check $LOG_FILE for details."
+    fi
+    exit $exit_code
+}
+trap rollback EXIT
 
 # Print next steps
 print_next_steps() {
@@ -345,7 +459,7 @@ print_summary() {
     info "  Systemd units:     $SYSTEMD_DIR"
     info ""
     
-    if [[ "${CONFIG_CREATED:-false}" == "true" ]]; then
+    if [[ "${CONFIG_FILE_CREATED:-false}" == "true" ]]; then
         warn "Configuration file created but needs to be customized!"
         warn "Run: sudo nano $CONFIG_DIR/config.env"
     fi

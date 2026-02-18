@@ -121,3 +121,22 @@ sudo pve-b2-age-restore.sh daily BACKUP_FILENAME 999
 - [Configuration Guide](configuration.md) — all config options
 - [Backup Operations](backup-operations.md) — manual runs and monitoring
 - [Troubleshooting](../troubleshooting/common-issues.md) — when something goes wrong
+
+## Undo Installation
+
+If you need to remove PVE B2 Age Backup:
+
+```bash
+sudo /opt/pve-b2-age-backup/uninstall.sh
+# or if cloned from git (run from repo root):
+sudo ./uninstall.sh
+```
+
+The uninstaller:
+- Stops and removes systemd timers
+- Removes all installed scripts
+- **Preserves** your configuration and encryption keys
+
+After running the uninstaller, remember to:
+1. Remove the hook script path from Proxmox backup jobs
+2. Manually delete `/etc/pve-b2-age-backup/` if you want to remove keys
