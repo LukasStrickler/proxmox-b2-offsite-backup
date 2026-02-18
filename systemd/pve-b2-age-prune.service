@@ -8,6 +8,8 @@ ExecStart=/usr/local/sbin/pve-b2-age-prune.sh
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pve-b2-age-prune
+Restart=on-failure
+RestartSec=5
 
 # Security hardening
 NoNewPrivileges=true
@@ -16,3 +18,8 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/log /run/lock
 ReadOnlyPaths=/etc/pve-b2-age-backup
+
+# Additional hardening
+ProtectKernelTunables=true
+ProtectClock=true
+ProtectHostname=true

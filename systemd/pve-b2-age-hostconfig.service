@@ -8,6 +8,8 @@ ExecStart=/usr/local/sbin/pve-b2-age-hostconfig.sh
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pve-b2-age-hostconfig
+Restart=on-failure
+RestartSec=5
 
 # Security hardening
 NoNewPrivileges=true
@@ -16,3 +18,8 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/log /var/tmp /run/lock
 ReadOnlyPaths=/etc /var/lib/pve-cluster /root /etc/pve-b2-age-backup
+
+# Additional hardening
+ProtectKernelTunables=true
+ProtectClock=true
+ProtectHostname=true
