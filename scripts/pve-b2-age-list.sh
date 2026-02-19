@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Source shared functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+source "${SCRIPT_DIR}/../lib/common.sh" 2>/dev/null || source "/usr/local/lib/pve-b2-age/common.sh"
+
+show_usage() {
+    cat <<'EOF'
+Usage: pve-b2-age-list.sh [options] [tier]
+
+List and browse encrypted backups stored in Backblaze B2
+
+Options:
+  -h, --help           Show this help message
+  -j, --json           Output in JSON format
+  -v, --verbose        Show detailed information
+  -d, --download-info  Show download commands for each backup
+  --host HOST          Filter by hostname (default: current host)
+  --vmid ID            Filter by VMID/CTID
+
+Arguments:
+  tier                 "daily", "monthly", "logs", "manifest", "hostconfig", or "all"
+                       (default: daily)
+
+Examples:
+  pve-b2-age-list.sh
+  pve-b2-age-list.sh -v monthly
+  pve-b2-age-list.sh --vmid 101 all
+  pve-b2-age-list.sh -j daily
+EOF
+}
+
+JSON_OUTPUT=false
+VERBOSE=false
+SHOW_DOWNLOAD=false
+HOST_FILTER=""
+VMID_FILTER=""
+TIER="daily"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) show_usage; exit 0 ;;
+        -j|--json) JSON_OUTPUT=true; shift ;;
+        -v|--verbose) VERBOSE=true; shift ;;
+        -d|--download-info) SHOW_DOWNLOAD=true; shift ;;
+        --host) [[ -n "${2:-}" ]] || { echo "ERROR: --host requires a value" >&2; exit 1; }; HOST_FILTER="$2"; shift 2 ;;
+        --vmid) [[ -n "${2:-}" ]] || { echo "ERROR: --vmid requires a value" >&2; exit 1; }; VMID_FILTER="$2"; shift 2 ;;
+        daily|monthly|logs|manifest|hostconfig|all) TIER="$1"; shift ;;
+        *) echo "Unknown option: $1" >&2; show_usage; exit 1 ;;
+    esac
+done
+
+load_config || exit 1
+
+validate_config "RCLONE_REMOTE" || exit 1
+
+HOST="${HOST:-$(hostname -s)}"
+SEARCH_HOST="${HOST_FILTER:-$HOST}"
+REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${SEARCH_HOST}"
+
+need rclone
+need jq
+
+format_bytes() {
+    local bytes=$1
+    if command -v numfmt >/dev/null 2>&1; then
+        numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null || echo "${bytes}B"
+    elif command -v bc >/dev/null 2>&1; then
+        if (( bytes > 1099511627776 )); then printf "%.2f TiB" "$(echo "$bytes / 1099511627776" | bc -l)"
+        elif (( bytes > 1073741824 )); then printf "%.2f GiB" "$(echo "$bytes / 1073741824" | bc -l)"
+        elif (( bytes > 1048576 )); then printf "%.2f MiB" "$(echo "$bytes / 1048576" | bc -l)"
+        elif (( bytes > 1024 )); then printf "%.2f KiB" "$(echo "$bytes / 1024" | bc -l)"
+        else echo "${bytes}B"; fi
+    else
+        echo "${bytes}B"
+    fi
+}
+
+declare -a TIERS_TO_LIST
+if [[ "$TIER" == "all" ]]; then
+    TIERS_TO_LIST=("daily" "monthly" "logs" "manifest" "hostconfig")
+else
+    TIERS_TO_LIST=("$TIER")
+fi
+
+if [[ "$JSON_OUTPUT" == "true" ]]; then
+    echo "{"
+    echo "  \"host\": \"$SEARCH_HOST\","
+    echo "  \"tiers\": {"
+fi
+
+first_tier=true
+for current_tier in "${TIERS_TO_LIST[@]}"; do
+    REMOTE_DIR="${REMOTE_BASE}/${current_tier}"
+    
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        [[ "$first_tier" == "true" ]] || echo ","
+        echo -n "    \"$current_tier\": ["
+        first_tier=false
+    else
+        echo ""
+        echo "=== ${current_tier^^} BACKUPS ==="
+    fi
+    
+    files_json=$(rclone lsjson --files-only "$REMOTE_DIR" 2>/dev/null) || files_json="[]"
+    
+    if [[ -n "$VMID_FILTER" && "$current_tier" != "hostconfig" ]]; then
+        files_json=$(echo "$files_json" | jq --arg vmid "$VMID_FILTER" '[.[] | select(.Name | contains("-" + $vmid + "-"))]')
+    fi
+    
+    file_count=$(echo "$files_json" | jq 'length')
+    
+    if [[ "$file_count" -eq 0 ]]; then
+        if [[ "$JSON_OUTPUT" != "true" ]]; then
+            echo "  No backups found"
+        fi
+        [[ "$JSON_OUTPUT" == "true" ]] && echo -n "]"
+        continue
+    fi
+    
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+        printf "  Found %d backup(s)\n\n" "$file_count"
+    fi
+    
+    first_file=true
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        name=$(echo "$file" | jq -r '.Name')
+        size=$(echo "$file" | jq -r '.Size')
+        modtime=$(echo "$file" | jq -r '.ModTime')
+        
+        [[ "$name" != *.age ]] && continue
+        
+        backup_type="unknown"
+        vmid="unknown"
+        formatted_date="unknown"
+        
+        if [[ "$name" =~ vzdump-(qemu|lxc)-([0-9]+)-([0-9_]+)-([0-9_]+)\. ]]; then
+            backup_type="${BASH_REMATCH[1]}"
+            vmid="${BASH_REMATCH[2]}"
+            formatted_date="${BASH_REMATCH[3]//_/-} ${BASH_REMATCH[4]//_/:}"
+        fi
+        
+        if [[ "$JSON_OUTPUT" == "true" ]]; then
+            [[ "$first_file" == "true" ]] || echo -n ","
+            first_file=false
+            printf "\n      {\"name\": \"%s\", \"size\": %s, \"modtime\": \"%s\", \"vmid\": \"%s\", \"type\": \"%s\"}" \
+                "$name" "$size" "$modtime" "$vmid" "$backup_type"
+        else
+            printf "  %-60s %10s\n" "$name" "$(format_bytes "$size")"
+            if [[ "$VERBOSE" == "true" ]]; then
+                printf "    Type: %-6s  VMID: %-6s  Date: %s\n" "$backup_type" "$vmid" "$formatted_date"
+            fi
+            if [[ "$SHOW_DOWNLOAD" == "true" ]]; then
+                echo "    Download: rclone copyto '${REMOTE_DIR}/${name}' './${name}'"
+                echo ""
+            fi
+        fi
+    done < <(echo "$files_json" | jq -c '.[]')
+    
+    [[ "$JSON_OUTPUT" == "true" ]] && echo -e "\n    ]"
+done
+
+if [[ "$JSON_OUTPUT" == "true" ]]; then
+    echo "  }"
+    echo "}"
+else
+    echo ""
+    echo "=== SUMMARY ==="
+    echo "Host: $SEARCH_HOST"
+    echo "Remote: $RCLONE_REMOTE"
+    echo "Tiers: ${TIERS_TO_LIST[*]}"
+fi
+
+exit 0

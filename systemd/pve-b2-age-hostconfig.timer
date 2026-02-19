@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly host configuration backup for PVE B2 Age
+Documentation=https://github.com/LukasStrickler/proxmox-b2-offsite-backup
+
+[Timer]
+OnCalendar=Sun *-*-* 07:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
