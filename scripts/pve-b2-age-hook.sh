@@ -16,6 +16,7 @@ VMID="${3:-}"
 
 # Load configuration
 load_config || exit 1
+LOG="${LOG:-/var/log/pve-b2-age.log}"
 
 # Validate required configuration
 validate_config "RCLONE_REMOTE" "DUMPDIR" "AGE_RECIPIENTS" || exit 1
@@ -35,8 +36,6 @@ REMOTE_DAILY="${REMOTE_BASE}/daily"
 REMOTE_MONTHLY="${REMOTE_BASE}/monthly"
 REMOTE_LOGS="${REMOTE_BASE}/logs"
 REMOTE_MANIFEST="${REMOTE_BASE}/manifest"
-
-LOG="${LOG:-/var/log/pve-b2-age.log}"
 
 # Check dependencies
 need age

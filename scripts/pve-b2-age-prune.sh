@@ -158,7 +158,7 @@ delete_excess "$REMOTE_LOGS" "$KEEP_LOGS" '\.age$' 'log files'
 # Cleanup uncommitted/hidden files on B2
 if [[ "$DRY_RUN" == "false" ]]; then
     log "Running rclone cleanup..."
-    rclone cleanup "$RCLONE_REMOTE" >>"$LOG" 2>&1 || log "WARNING: Cleanup had issues"
+    rclone cleanup "$(sanitize_path "$REMOTE_BASE")" >>"$LOG" 2>&1 || log "WARNING: Cleanup had issues"
 fi
 
 log "Prune completed"

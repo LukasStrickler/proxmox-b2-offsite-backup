@@ -23,6 +23,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 load_config || exit 1
+LOG="${LOG:-/var/log/pve-b2-age.log}"
 validate_config "RCLONE_REMOTE" "AGE_RECIPIENTS" || exit 1
 
 if [[ ! -f "$AGE_RECIPIENTS" ]]; then
@@ -33,7 +34,6 @@ fi
 HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
 REMOTE_HOSTCFG="${REMOTE_BASE}/hostconfig"
-LOG="${LOG:-/var/log/pve-b2-age.log}"
 WORKDIR="${WORKDIR:-/var/tmp}"
 
 need tar

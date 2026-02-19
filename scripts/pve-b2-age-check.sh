@@ -47,10 +47,14 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-pass() { echo -e "${GREEN}✓${NC} $*"; ((PASS++)); }
-fail() { echo -e "${RED}✗${NC} $*"; ((FAIL++)); }
-warn() { echo -e "${YELLOW}!${NC} $*"; ((WARN++)); }
-info() { [[ "$VERBOSE" == "true" ]] && echo "  $*"; }
+pass() { echo -e "${GREEN}✓${NC} $*"; PASS=$((PASS + 1)); }
+fail() { echo -e "${RED}✗${NC} $*"; FAIL=$((FAIL + 1)); }
+warn() { echo -e "${YELLOW}!${NC} $*"; WARN=$((WARN + 1)); }
+info() {
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo "  $*"
+    fi
+}
 
 check_dependencies() {
     echo ""
@@ -176,7 +180,10 @@ check_staging_space() {
         pass "Staging directory exists: $dumpdir"
         
         local available_kb
-        available_kb=$(df -k "$dumpdir" 2>/dev/null | awk 'NR==2 {print $4}')
+        if ! available_kb=$(df -k "$dumpdir" 2>/dev/null | awk 'NR==2 {print $4}'); then
+            warn "Could not determine available space for: $dumpdir"
+            return
+        fi
         
         if [[ -n "$available_kb" ]]; then
             local available_gb=$((available_kb / 1024 / 1024))
