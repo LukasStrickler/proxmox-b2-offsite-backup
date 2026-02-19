@@ -4,7 +4,7 @@ Solutions to common problems with PVE B2 Age Backup.
 
 ## ⚡ Run the diagnostic first
 
-Run the built-in check. It verifies that required tools are installed, the config file exists and has the right settings, rclone can see your B2 bucket, encryption keys are in place, and the hook script is installed.
+Run the built-in check. It verifies that required tools are installed, the config file exists and has the right settings, the `rclone` remote is configured, encryption keys are in place, and the hook script is installed.
 
 ```bash
 sudo pve-b2-age-check.sh
@@ -203,7 +203,7 @@ grep "uploading" /var/log/pve-b2-age.log
 **Fix**:
 ```bash
 # Check rclone config
-sudo rclone config show b2:
+sudo rclone config show b2
 
 # Verify bucket exists
 sudo rclone lsf b2:

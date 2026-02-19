@@ -170,7 +170,8 @@ upload_cutoff = 200M
 upload_concurrency = 4
 ```
 
-- **hard_delete = false**: (Recommended) Soft-delete files in B2 (hide) instead of permanent erase, allowing recovery of accidental deletions via B2 interface.
+- **hard_delete = false**: Keeps default `rclone` delete behavior as soft-delete/hide when `--b2-hard-delete` is not used.
+- **Important**: `pve-b2-age-prune.sh` uses `--b2-hard-delete` by design, so prune deletions are permanent.
 - **chunk_size**: Larger chunks improve upload stability for large files.
 
 ## Environment Overrides
