@@ -48,12 +48,24 @@ ENC_NAME="$2"
 NEW_ID="$3"
 STORAGE="${4:-}"
 
+# Validate backup filename (prevent path traversal)
+if [[ "$ENC_NAME" =~ /|\.\. ]]; then
+    echo "ERROR: Backup filename contains invalid characters (path traversal detected)" >&2
+    exit 1
+fi
+# Extract just the filename to be safe
+ENC_NAME=$(basename "$ENC_NAME")
+if [[ ! "$ENC_NAME" =~ \.age$ ]]; then
+    echo "ERROR: Backup filename must end with .age" >&2
+    exit 1
+fi
+
 if ! [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
     echo "ERROR: NEW_ID must be a positive integer, got: $NEW_ID" >&2
     exit 1
 fi
-if (( 10#$NEW_ID < 1 || 10#$NEW_ID > 999999999 )); then
-    echo "ERROR: NEW_ID must be between 1 and 999999999, got: $NEW_ID" >&2
+if (( 10#$NEW_ID < 100 || 10#$NEW_ID > 999999999 )); then
+    echo "ERROR: NEW_ID must be between 100 and 999999999, got: $NEW_ID" >&2
     exit 1
 fi
 
@@ -91,24 +103,25 @@ fi
 umask 077
 mkdir -p "$WORKDIR"
 
-local_enc="${WORKDIR}/${ENC_NAME}"
-local_plain="${WORKDIR}/${ENC_NAME%.age}"
-manifest_name="${ENC_NAME%.age}.json.age"
-manifest_enc="${WORKDIR}/${manifest_name}"
-manifest_plain="${WORKDIR}/${manifest_name%.age}"
+# Initialize paths (set early for trap safety)
+manifest_enc=""
+manifest_plain=""
+local_enc=""
+local_plain=""
 
 # Cleanup function
 cleanup() {
     local exit_code=$?
     if [[ "$exit_code" -ne 0 ]]; then
         log "Cleanup: preserving files for debugging (exit code: $exit_code)"
-        log "  Encrypted: $local_enc"
-        log "  Manifest: $manifest_enc"
-        [[ -f "$local_plain" ]] && log "  Plaintext: $local_plain (exists)"
+        [[ -n "$local_enc" && -f "$local_enc" ]] && log "  Encrypted: $local_enc"
+        [[ -n "$manifest_enc" && -f "$manifest_enc" ]] && log "  Manifest: $manifest_enc"
+        [[ -n "$local_plain" && -f "$local_plain" ]] && log "  Plaintext: $local_plain (exists)"
     else
         log "Cleanup: removing temporary files"
-        rm -f "$local_enc" "$manifest_enc" "$manifest_plain" 2>/dev/null || true
-        # Keep plaintext for user to delete after verification
+        [[ -n "$local_enc" ]] && rm -f "$local_enc" 2>/dev/null || true
+        [[ -n "$manifest_enc" ]] && rm -f "$manifest_enc" 2>/dev/null || true
+        [[ -n "$manifest_plain" ]] && rm -f "$manifest_plain" 2>/dev/null || true
         log "NOTE: Decrypted backup kept at: $local_plain"
         log "      Verify and delete manually when done."
     fi
@@ -127,31 +140,36 @@ if qm status "$NEW_ID" >/dev/null 2>&1 || pct status "$NEW_ID" >/dev/null 2>&1; 
     exit 1
 fi
 
-# Download encrypted backup
-log "Downloading encrypted backup from B2..."
-if ! rclone copyto --fast-list --transfers 1 --checkers 8 \
-    "${REMOTE_DIR}/${ENC_NAME}" "$local_enc"; then
-    log "ERROR: Failed to download backup"
-    exit 1
-fi
-log "Backup download complete ($(stat -c '%s' "$local_enc") bytes)"
-
-# Download manifest
+# Download manifest first to get size before downloading backup
 log "Downloading manifest..."
+manifest_name="${ENC_NAME%.age}.json.age"
+manifest_enc="${WORKDIR}/${manifest_name}"
+manifest_plain="${WORKDIR}/${manifest_name%.age}"
+local_enc="${WORKDIR}/${ENC_NAME}"
+local_plain="${WORKDIR}/${ENC_NAME%.age}"
+
+# Determine manifest location based on tier
+# Monthly backups have manifests in the monthly directory
+# Daily backups have manifests in the manifest directory
+if [[ "$TIER" == "monthly" ]]; then
+    manifest_remote_path="${REMOTE_DIR}/${manifest_name}"
+else
+    manifest_remote_path="${REMOTE_MANIFEST}/${manifest_name}"
+fi
+
 if ! rclone copyto --fast-list --transfers 1 --checkers 8 \
-    "${REMOTE_MANIFEST}/${manifest_name}" "$manifest_enc"; then
+    "$manifest_remote_path" "$manifest_enc"; then
     log "ERROR: Failed to download manifest"
     exit 1
 fi
 
-# Decrypt manifest
 log "Decrypting manifest..."
 if ! age -d -i "$AGE_IDENTITY" -o "$manifest_plain" "$manifest_enc"; then
     log "ERROR: Failed to decrypt manifest (wrong key?)"
     exit 1
 fi
 
-# Parse manifest
+# Parse and validate manifest
 expected_sha=$(jq -r '.sha256' "$manifest_plain")
 expected_size=$(jq -r '.size_bytes' "$manifest_plain")
 original_vmid=$(jq -r '.vmid' "$manifest_plain")
@@ -159,11 +177,26 @@ original_host=$(jq -r '.host' "$manifest_plain")
 backup_file=$(jq -r '.file' "$manifest_plain")
 created_date=$(jq -r '.created' "$manifest_plain")
 
-if [[ -n "$backup_file" && "$backup_file" != "${ENC_NAME%.age}" ]]; then
+# Validate manifest values
+if [[ "$expected_size" == "null" || ! "$expected_size" =~ ^[0-9]+$ ]]; then
+    log "ERROR: Invalid manifest - size_bytes is missing or not numeric"
+    exit 1
+fi
+
+if [[ "$expected_sha" == "null" || ${#expected_sha} -ne 64 ]]; then
+    log "ERROR: Invalid manifest - sha256 is missing or wrong length"
+    exit 1
+fi
+# Validate SHA256 is hex-only (prevent malformed values)
+if [[ ! "$expected_sha" =~ ^[0-9a-fA-F]+$ ]]; then
+    log "ERROR: Invalid manifest - sha256 contains non-hex characters"
+    exit 1
+fi
+
+if [[ -n "$backup_file" && "$backup_file" != "null" && "$backup_file" != "${ENC_NAME%.age}" ]]; then
     log "ERROR: Manifest file mismatch!"
     log "  Requested: ${ENC_NAME%.age}"
     log "  Manifest says: $backup_file"
-    log "  This may indicate a corrupted or mismatched manifest."
     exit 1
 fi
 
@@ -171,8 +204,22 @@ log "Manifest info:"
 log "  Original VMID: $original_vmid"
 log "  Original Host: $original_host"
 log "  Created: $created_date"
-log "  Expected size: $expected_size bytes"
+log "  Expected size: $(format_bytes "$expected_size")"
 log "  Expected SHA256: ${expected_sha:0:16}..."
+
+# Check disk space BEFORE downloading (need space for encrypted + decrypted + buffer)
+# Encrypted file is typically similar size, use 2.5x for safety margin
+local required_space=$(( (expected_size * 5) / 2 ))
+check_disk_space "$required_space" "$WORKDIR" || exit 1
+
+# Download encrypted backup
+log "Downloading encrypted backup from B2..."
+if ! rclone copyto --fast-list --transfers 1 --checkers 8 \
+    "${REMOTE_DIR}/${ENC_NAME}" "$local_enc"; then
+    log "ERROR: Failed to download backup"
+    exit 1
+fi
+log "Backup download complete ($(format_bytes "$(stat -c '%s' "$local_enc")"))"
 
 # Decrypt backup
 log "Decrypting backup (this may take a while)..."
