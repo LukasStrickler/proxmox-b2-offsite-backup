@@ -135,15 +135,14 @@ Directories used for temporary file operations.
 # For restores (needs space for full backup)
 RESTORE_WORKDIR="/var/lib/vz/dump"
 
-# For verification downloads
-VERIFY_WORKDIR="/var/tmp"
-
 # For host config backup generation
 WORKDIR="/var/tmp"
 ```
 
 - **RESTORE_WORKDIR**: Where decrypted `.vma.zst` files are placed for Proxmox to restore.
 - **WORKDIR**: Used by `pve-b2-age-hostconfig.sh` to assemble `/etc` backups.
+
+**Note**: The verify script (`pve-b2-age-verify.sh`) uses a dedicated private temp directory (`/var/tmp/pve-b2-age-verify`) with 700 permissions to prevent symlink attacks. This is hardcoded for security and does not require configuration.
 
 ### Logging
 
@@ -176,12 +175,55 @@ upload_concurrency = 4
 
 ## Environment Overrides
 
-You can override any setting per-command:
+You can override some settings per-command:
 
 ```bash
 # List backups from a different bucket
 RCLONE_REMOTE="b2:ARCHIVE_BUCKET" pve-b2-age-list.sh
-
-# Use a different config file entirely
-CONFIG_FILE="/etc/pve-b2-age-backup/dev.env" pve-b2-age-check.sh
 ```
+
+**Note**: For security, all scripts use a hardcoded config path (`/etc/pve-b2-age-backup/config.env`). The `CONFIG_FILE` environment variable is not supported.
+
+---
+
+## B2 Bucket Lifecycle Rules
+
+Configure these in the Backblaze B2 Console under Bucket → Lifecycle Settings:
+
+| Setting | Recommended Value | Why |
+|---------|------------------|-----|
+| **Days to keep incomplete multipart uploads** | 7 | Failed large file uploads leave orphaned parts that incur storage costs |
+| **Days to hide deleted files** | 0 | Since prune uses `--b2-hard-delete`, this prevents hidden file accumulation |
+| **Days to keep old versions** | 0 | Same reason - prune handles version control |
+
+**Critical**: Without the incomplete multipart upload cleanup, a single failed 80GB backup could leave 80GB of orphaned parts costing ~$0.40/month indefinitely.
+
+---
+
+## Key Rotation
+
+Age does not support in-place key rotation. To rotate encryption keys:
+
+1. **Generate new key pair**:
+   ```bash
+   age-keygen -o /etc/pve-b2-age-backup/age-new.key
+   chmod 600 /etc/pve-b2-age-backup/age-new.key
+   ```
+
+2. **Add new public key to recipients file**:
+   ```bash
+   grep -oE 'age1[0-9a-z]+' /etc/pve-b2-age-backup/age-new.key >> /etc/pve-b2-age-backup/recipients.txt
+   ```
+
+3. **New backups** will be encrypted to ALL keys in `recipients.txt`
+
+4. **To revoke old key access**: Remove the old public key from `recipients.txt`, then either:
+   - Re-encrypt old backups with the new key set (download, decrypt, re-encrypt, re-upload)
+   - Delete old backups that the old key can still decrypt
+
+5. **For post-quantum security** (data sensitive for 5+ years):
+   ```bash
+   age-keygen -pq -o /etc/pve-b2-age-backup/age-pq.key
+   ```
+   Note: Hybrid post-quantum recipients cannot be mixed with standard recipients in the same file.
+

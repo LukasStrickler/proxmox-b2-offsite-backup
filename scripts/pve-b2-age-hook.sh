@@ -44,8 +44,14 @@ need flock
 need sha256sum
 need jq
 
+# Create dedicated lock directory (root-only)
+LOCK_DIR="/run/pve-b2-age"
+LOCK_FILE="${LOCK_DIR}/hook.lock"
+mkdir -p "$LOCK_DIR"
+chmod 700 "$LOCK_DIR"
+
 # Serialize hook actions to protect minimal staging design
-exec 200>"/run/lock/pve-b2-age-hook.lock"
+exec 200>"$LOCK_FILE"
 if ! flock -w 300 200; then
     log "ERROR: Could not acquire lock after 5 minutes"
     exit 1
@@ -68,21 +74,49 @@ upload_encrypted_stream() {
     local filename
     filename=$(basename "$src_file")
     
-    log "Uploading encrypted: $filename -> $remote_path"
+    local file_size
+    if ! file_size=$(stat -c '%s' "$src_file" 2>/dev/null); then
+        log "ERROR: Cannot stat file: $src_file"
+        return 1
+    fi
     
-    local rclone_cmd="age -R \"$AGE_RECIPIENTS\" \"$src_file\" | rclone rcat"
-    rclone_cmd+=" --fast-list"
-    rclone_cmd+=" --streaming-upload-cutoff \"${RCAT_CUTOFF:-8M}\""
-    rclone_cmd+=" --transfers 4"
-    rclone_cmd+=" --checkers 8"
-    rclone_cmd+=" --retries 5"
-    rclone_cmd+=" --retries-sleep 10s"
-    rclone_cmd+=" --low-level-retries 15"
-    rclone_cmd+=" --timeout 5m"
-    rclone_cmd+=" --contimeout 1m"
-    rclone_cmd+=" \"$(sanitize_path "$remote_path")\""
+    local sanitized_remote
+    sanitized_remote=$(sanitize_path "$remote_path")
     
-    retry_with_backoff "$rclone_cmd" "${UPLOAD_ATTEMPTS:-6}" "${BASE_BACKOFF:-20}"
+    log "Uploading encrypted: $filename ($(format_bytes "$file_size")) -> $remote_path"
+    
+    local attempt=1
+    local max_attempts="${UPLOAD_ATTEMPTS:-6}"
+    local base_delay="${BASE_BACKOFF:-20}"
+    
+    while true; do
+        log "Upload attempt $attempt/$max_attempts: $filename"
+        
+        if age -R "$AGE_RECIPIENTS" "$src_file" 2>>"$LOG" | \
+           rclone rcat \
+               --fast-list \
+               --streaming-upload-cutoff "${RCAT_CUTOFF:-8M}" \
+               --transfers 4 \
+               --checkers 8 \
+               --retries 5 \
+               --retries-sleep 10s \
+               --low-level-retries 15 \
+               --timeout 5m \
+               --contimeout 1m \
+               "$sanitized_remote" >>"$LOG" 2>&1; then
+            return 0
+        fi
+        
+        if (( attempt >= max_attempts )); then
+            log "ERROR: All $max_attempts upload attempts failed for $filename"
+            return 1
+        fi
+        
+        local delay=$(( base_delay * (2 ** (attempt - 1)) ))
+        log "Upload failed, waiting ${delay}s before retry..."
+        sleep "$delay"
+        attempt=$(( attempt + 1 ))
+    done
 }
 
 main() {
@@ -142,24 +176,36 @@ main() {
                     log "Manifest upload successful"
                     manifest_ok=true
                 else
-                    log "ERROR: Manifest upload failed (backup data is safe in B2, but integrity verification will not be possible)"
+                    log "ERROR: Manifest upload failed"
+                    log "WARNING: Keeping local plaintext: $SRC"
+                    log "WARNING: Re-run backup or manually delete after verifying remote backup"
+                    exit 1
                 fi
                 
-                if [[ "$manifest_ok" == "true" ]]; then
-                    rm -f -- "$SRC"
-                    log "Deleted local plaintext backup: $SRC"
-                else
-                    log "WARNING: Keeping local plaintext due to manifest failure: $SRC"
-                    log "WARNING: Re-run backup or manually delete after verifying remote backup"
-                fi
+                rm -f -- "$SRC"
+                log "Deleted local plaintext backup: $SRC"
                 
                 if [[ "${ENABLE_MONTHLY:-true}" == "true" && "$(date +%d)" == "01" ]]; then
                     local monthly_object="${REMOTE_MONTHLY}/${base_filename}.age"
+                    local monthly_manifest="${REMOTE_MONTHLY}/${base_filename}.json.age"
                     log "Creating monthly copy..."
-                    rclone copyto --fast-list --transfers 4 --checkers 8 \
+                    if rclone copyto --fast-list --transfers 4 --checkers 8 \
                         "$(sanitize_path "$daily_object")" \
-                        "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1 || \
-                        log "WARN: Monthly copy failed"
+                        "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1; then
+                        log "Monthly backup copy created"
+                        if rclone copyto --fast-list --transfers 4 --checkers 8 \
+                            "$(sanitize_path "$manifest_object")" \
+                            "$(sanitize_path "$monthly_manifest")" >>"$LOG" 2>&1; then
+                            log "Monthly manifest copy created"
+                        else
+                            log "ERROR: Monthly manifest copy failed, deleting inconsistent monthly backup copy"
+                            if ! rclone delete "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1; then
+                                log "WARN: Failed to delete inconsistent monthly backup copy: $monthly_object"
+                            fi
+                        fi
+                    else
+                        log "WARN: Monthly backup copy failed"
+                    fi
                 fi
                 
                 log "Backup completed successfully for VM/CT $VMID"

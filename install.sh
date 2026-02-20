@@ -326,8 +326,18 @@ generate_age_key() {
     read -rp "Generate age key now? [Y/n]: " response
     
     if [[ -z "$response" || "$response" =~ ^[Yy]$ ]]; then
-        info "Generating age key..."
-        age-keygen -o "$key_file" 2>&1 | tee -a "$LOG_FILE"
+        read -rp "Generate post-quantum key? (recommended for data sensitive 5+ years) [y/N]: " pq_response
+        
+        if [[ "$pq_response" =~ ^[Yy]$ ]] && age-keygen -h 2>&1 | grep -q -- "-pq"; then
+            info "Generating post-quantum age key (ML-KEM + X25519 hybrid)..."
+            age-keygen -pq -o "$key_file" 2>&1 | tee -a "$LOG_FILE"
+        else
+            if [[ "$pq_response" =~ ^[Yy]$ ]]; then
+                warn "age-keygen does not support -pq; falling back to standard key generation."
+            fi
+            info "Generating standard age key (X25519)..."
+            age-keygen -o "$key_file" 2>&1 | tee -a "$LOG_FILE"
+        fi
         chmod 600 "$key_file"
         
         grep -oE 'age1[0-9a-z]+' "$key_file" > "$recipients_file"

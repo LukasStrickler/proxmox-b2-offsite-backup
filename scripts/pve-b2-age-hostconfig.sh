@@ -61,11 +61,12 @@ if ! tar -C / -caf "$archive" \
 fi
 
 size=$(stat -c '%s' "$archive")
-log "Archive created: $(numfmt --to=iec-i $size 2>/dev/null || echo "${size}B")"
+log "Archive created: $(format_bytes "$size")"
 
 dst="${REMOTE_HOSTCFG}/${name}.age"
 log "Uploading encrypted archive to B2..."
 
+# Note: --size is intentionally omitted because encrypted payload size differs from plaintext
 if age -R "$AGE_RECIPIENTS" "$archive" | rclone rcat \
     --fast-list \
     --streaming-upload-cutoff "${RCAT_CUTOFF:-8M}" \
