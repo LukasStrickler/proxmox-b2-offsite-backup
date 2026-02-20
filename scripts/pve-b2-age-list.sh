@@ -45,8 +45,26 @@ while [[ $# -gt 0 ]]; do
         -j|--json) JSON_OUTPUT=true; shift ;;
         -v|--verbose) VERBOSE=true; shift ;;
         -d|--download-info) SHOW_DOWNLOAD=true; shift ;;
-        --host) [[ -n "${2:-}" ]] || { echo "ERROR: --host requires a value" >&2; exit 1; }; HOST_FILTER="$2"; shift 2 ;;
-        --vmid) [[ -n "${2:-}" ]] || { echo "ERROR: --vmid requires a value" >&2; exit 1; }; VMID_FILTER="$2"; shift 2 ;;
+        --host) 
+            [[ -n "${2:-}" ]] || { echo "ERROR: --host requires a value" >&2; exit 1; }
+            # Validate hostname format (prevent path traversal)
+            if [[ "$2" =~ /|\.\. || ! "$2" =~ ^[A-Za-z0-9._-]+$ ]]; then
+                echo "ERROR: Invalid hostname format (only alphanumeric, dots, hyphens, underscores allowed)" >&2
+                exit 1
+            fi
+            HOST_FILTER="$2"
+            shift 2 
+            ;;
+        --vmid) 
+            [[ -n "${2:-}" ]] || { echo "ERROR: --vmid requires a value" >&2; exit 1; }
+            # Validate VMID is numeric only
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                echo "ERROR: --vmid must be numeric" >&2
+                exit 1
+            fi
+            VMID_FILTER="$2"
+            shift 2 
+            ;;
         daily|monthly|logs|manifest|hostconfig|all) TIER="$1"; shift ;;
         *) echo "Unknown option: $1" >&2; show_usage; exit 1 ;;
     esac
@@ -104,7 +122,12 @@ for current_tier in "${TIERS_TO_LIST[@]}"; do
         echo "=== ${current_tier^^} BACKUPS ==="
     fi
     
-    files_json=$(rclone lsjson --files-only "$REMOTE_DIR" 2>/dev/null) || files_json="[]"
+    if ! files_json=$(rclone lsjson --files-only --fast-list "$REMOTE_DIR" 2>/dev/null); then
+        if [[ "$JSON_OUTPUT" != "true" ]]; then
+            echo "  ERROR: Failed to list remote directory"
+        fi
+        files_json="[]"
+    fi
     
     if [[ -n "$VMID_FILTER" && "$current_tier" != "hostconfig" ]]; then
         files_json=$(echo "$files_json" | jq --arg vmid "$VMID_FILTER" '[.[] | select(.Name | contains("-" + $vmid + "-"))]')
@@ -146,8 +169,14 @@ for current_tier in "${TIERS_TO_LIST[@]}"; do
         if [[ "$JSON_OUTPUT" == "true" ]]; then
             [[ "$first_file" == "true" ]] || echo -n ","
             first_file=false
-            printf "\n      {\"name\": \"%s\", \"size\": %s, \"modtime\": \"%s\", \"vmid\": \"%s\", \"type\": \"%s\"}" \
-                "$name" "$size" "$modtime" "$vmid" "$backup_type"
+            # Use jq for safe JSON encoding to prevent injection
+            printf "\n      %s" "$(jq -c -n \
+                --arg name "$name" \
+                --argjson size "$size" \
+                --arg modtime "$modtime" \
+                --arg vmid "$vmid" \
+                --arg type "$backup_type" \
+                '{name: $name, size: $size, modtime: $modtime, vmid: $vmid, type: $type}')"
         else
             printf "  %-60s %10s\n" "$name" "$(format_bytes "$size")"
             if [[ "$VERBOSE" == "true" ]]; then

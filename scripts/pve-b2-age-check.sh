@@ -76,7 +76,8 @@ check_config_file() {
     echo ""
     echo "=== Configuration ==="
     
-    local config_file="${CONFIG_FILE:-/etc/pve-b2-age-backup/config.env}"
+    # Use hardcoded path for security - no CONFIG_FILE env override
+    local config_file="/etc/pve-b2-age-backup/config.env"
     
     if [[ ! -f "$config_file" ]]; then
         fail "Config file not found: $config_file"
@@ -85,6 +86,15 @@ check_config_file() {
     
     pass "Config file exists: $config_file"
     
+    # Check ownership (must be root:root for security)
+    local owner
+    owner=$(stat -c '%U:%G' "$config_file" 2>/dev/null)
+    if [[ "$owner" != "root:root" ]]; then
+        fail "Config file must be owned by root:root (got: $owner)"
+        return
+    fi
+    pass "Config file owned by root:root"
+    
     if [[ ! -r "$config_file" ]]; then
         fail "Config file not readable (permission denied)"
         return
@@ -92,9 +102,11 @@ check_config_file() {
     
     pass "Config file readable"
     
-    # Source and check required variables
-    # shellcheck source=/dev/null
-    source "$config_file" 2>/dev/null || true
+    # Source and check required variables using secure load_config
+    if ! load_config 2>/dev/null; then
+        fail "Failed to load config (check permissions/ownership)"
+        return
+    fi
     
     local required_vars=("RCLONE_REMOTE" "AGE_RECIPIENTS")
     for var in "${required_vars[@]}"; do
@@ -243,6 +255,15 @@ check_systemd_timers() {
     done
 }
 
+check_b2_recommendations() {
+    echo ""
+    echo "=== B2 Best Practices ==="
+    
+    warn "Ensure B2 bucket has lifecycle rule to clean incomplete multipart uploads (7 days)"
+    info "B2 Console -> Bucket -> Lifecycle Settings"
+    info "This prevents cost accumulation from failed large file uploads"
+}
+
 print_summary() {
     echo ""
     echo "=========================================="
@@ -277,6 +298,7 @@ main() {
     check_staging_space
     check_hook_script
     check_systemd_timers
+    check_b2_recommendations
     
     print_summary
 }
