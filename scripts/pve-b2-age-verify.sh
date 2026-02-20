@@ -54,7 +54,8 @@ HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
 REMOTE_DIR="${REMOTE_BASE}/${TIER}"
 REMOTE_MANIFEST="${REMOTE_BASE}/manifest"
-WORKDIR="${VERIFY_WORKDIR:-/var/tmp}"
+# Use private temp directory to prevent symlink attacks
+WORKDIR="${VERIFY_WORKDIR:-/var/tmp/pve-b2-age-verify}"
 LOG="${LOG:-/var/log/pve-b2-age-verify.log}"
 
 need rclone
@@ -67,8 +68,10 @@ if [[ ! -f "$AGE_IDENTITY" ]]; then
     exit 1
 fi
 
+# Create private temp directory (root-only, prevents symlink attacks)
 umask 077
 mkdir -p "$WORKDIR"
+chmod 700 "$WORKDIR"
 
 local_enc="${WORKDIR}/${ENC_NAME}"
 local_plain="${WORKDIR}/${ENC_NAME%.age}"
