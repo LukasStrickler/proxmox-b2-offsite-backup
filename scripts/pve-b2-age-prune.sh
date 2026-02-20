@@ -72,12 +72,35 @@ KEEP_DAILY="${KEEP_DAILY:-7}"
 KEEP_MONTHLY="${KEEP_MONTHLY:-1}"
 KEEP_LOGS="${KEEP_LOGS:-30}"
 
+# Validate retention values (prevent negative/malicious values and leading zeros)
+# Use base-10 enforcement to prevent octal interpretation
+KEEP_DAILY=$((10#$KEEP_DAILY))
+KEEP_MONTHLY=$((10#$KEEP_MONTHLY))
+KEEP_LOGS=$((10#$KEEP_LOGS))
+if (( KEEP_DAILY < 1 )); then
+    log "ERROR: KEEP_DAILY must be a positive integer >= 1, got: $KEEP_DAILY"
+    exit 1
+fi
+if (( KEEP_MONTHLY < 1 )); then
+    log "ERROR: KEEP_MONTHLY must be a positive integer >= 1, got: $KEEP_MONTHLY"
+    exit 1
+fi
+if (( KEEP_LOGS < 1 )); then
+    log "ERROR: KEEP_LOGS must be a positive integer >= 1, got: $KEEP_LOGS"
+    exit 1
+fi
+
 # Check dependencies
 need rclone
 need flock
 
+# Create dedicated lock directory (root-only)
+LOCK_DIR="/run/pve-b2-age"
+mkdir -p "$LOCK_DIR"
+chmod 700 "$LOCK_DIR"
+
 # Acquire lock
-exec 200>"/run/lock/pve-b2-age-prune.lock"
+exec 200>"${LOCK_DIR}/prune.lock"
 if ! flock -n 200; then
     log "Prune already running, exiting"
     exit 0
@@ -87,6 +110,7 @@ log "Starting prune (dry-run=$DRY_RUN)"
 log "Retention: daily=$KEEP_DAILY, monthly=$KEEP_MONTHLY, logs=$KEEP_LOGS"
 
 # When pruning daily/monthly, also delete the corresponding manifest so we don't leave orphans.
+# Only delete manifest if backup deletion succeeded to avoid orphaning backups.
 delete_excess() {
     local remote_dir="$1"
     local keep_count="$2"
@@ -96,10 +120,20 @@ delete_excess() {
     
     log "Processing: $remote_dir (keep=$keep_count $label)"
     
-    # Get list of files sorted by name (newest first)
+    # Get list of files sorted by modification time (newest first)
+    # Using lsjson to get ModTime for correct chronological ordering
+    local files_json
+    if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir" 2>/dev/null); then
+        log "  ERROR: Failed to list $remote_dir"
+        return 1
+    fi
+    
     local files
-    if ! files=$(rclone lsf --files-only "$remote_dir" 2>/dev/null | grep -E "$pattern" | sort -r); then
-        log "  No files found or error accessing $remote_dir"
+    files=$(echo "$files_json" | jq -r --arg pattern "$pattern" \
+        '[.[] | select(.Name | test($pattern))] | sort_by(.ModTime) | reverse | .[].Name' 2>/dev/null)
+    
+    if [[ -z "$files" ]]; then
+        log "  No matching files found"
         return 0
     fi
     
@@ -134,13 +168,15 @@ delete_excess() {
             [[ -n "$manifest_dir" ]] && log "  [DRY-RUN] Would delete manifest: $manifest_dir/${file%.age}.json.age"
         else
             log "  Deleting: $full_path"
-            # Use --b2-hard-delete to permanently delete (not hide)
-            rclone deletefile --b2-hard-delete "$full_path" >>"$LOG" 2>&1 || \
-                log "    WARNING: Failed to delete $file"
-            if [[ -n "$manifest_dir" ]]; then
-                local manifest_file="${manifest_dir}/${file%.age}.json.age"
-                rclone deletefile --b2-hard-delete "$manifest_file" >>"$LOG" 2>&1 || \
-                    log "    WARNING: Failed to delete manifest (may not exist) $manifest_file"
+            if rclone deletefile --b2-hard-delete "$full_path" >>"$LOG" 2>&1; then
+                # Only delete manifest if backup deletion succeeded
+                if [[ -n "$manifest_dir" ]]; then
+                    local manifest_file="${manifest_dir}/${file%.age}.json.age"
+                    rclone deletefile --b2-hard-delete "$manifest_file" >>"$LOG" 2>&1 || \
+                        log "    WARNING: Failed to delete manifest (may not exist) $manifest_file"
+                fi
+            else
+                log "    WARNING: Failed to delete backup $file - keeping manifest"
             fi
         fi
     done <<< "$files_to_delete"
@@ -149,8 +185,8 @@ delete_excess() {
 # Prune daily backups (and their manifests)
 delete_excess "$REMOTE_DAILY" "$KEEP_DAILY" '\.age$' 'daily backups' "$REMOTE_MANIFEST"
 
-# Prune monthly backups (and their manifests)
-delete_excess "$REMOTE_MONTHLY" "$KEEP_MONTHLY" '\.age$' 'monthly backups' "$REMOTE_MANIFEST"
+# Prune monthly backups (with their own manifests now)
+delete_excess "$REMOTE_MONTHLY" "$KEEP_MONTHLY" '\.age$' 'monthly backups' "$REMOTE_MONTHLY"
 
 # Prune old logs (no manifest for log files)
 delete_excess "$REMOTE_LOGS" "$KEEP_LOGS" '\.age$' 'log files'
@@ -158,7 +194,7 @@ delete_excess "$REMOTE_LOGS" "$KEEP_LOGS" '\.age$' 'log files'
 # Cleanup uncommitted/hidden files on B2
 if [[ "$DRY_RUN" == "false" ]]; then
     log "Running rclone cleanup..."
-    rclone cleanup "$(sanitize_path "$REMOTE_BASE")" >>"$LOG" 2>&1 || log "WARNING: Cleanup had issues"
+    rclone cleanup --b2-hard-delete "$(sanitize_path "$REMOTE_BASE")" >>"$LOG" 2>&1 || log "WARNING: Cleanup had issues"
 fi
 
 log "Prune completed"
