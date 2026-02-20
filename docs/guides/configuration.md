@@ -135,15 +135,14 @@ Directories used for temporary file operations.
 # For restores (needs space for full backup)
 RESTORE_WORKDIR="/var/lib/vz/dump"
 
-# For verification downloads
-VERIFY_WORKDIR="/var/tmp"
-
 # For host config backup generation
 WORKDIR="/var/tmp"
 ```
 
 - **RESTORE_WORKDIR**: Where decrypted `.vma.zst` files are placed for Proxmox to restore.
 - **WORKDIR**: Used by `pve-b2-age-hostconfig.sh` to assemble `/etc` backups.
+
+**Note**: The verify script (`pve-b2-age-verify.sh`) uses a dedicated private temp directory (`/var/tmp/pve-b2-age-verify`) with 700 permissions to prevent symlink attacks. This is hardcoded for security and does not require configuration.
 
 ### Logging
 
@@ -176,15 +175,14 @@ upload_concurrency = 4
 
 ## Environment Overrides
 
-You can override any setting per-command:
+You can override some settings per-command:
 
 ```bash
 # List backups from a different bucket
 RCLONE_REMOTE="b2:ARCHIVE_BUCKET" pve-b2-age-list.sh
-
-# Use a different config file entirely
-CONFIG_FILE="/etc/pve-b2-age-backup/dev.env" pve-b2-age-check.sh
 ```
+
+**Note**: For security, all scripts use a hardcoded config path (`/etc/pve-b2-age-backup/config.env`). The `CONFIG_FILE` environment variable is not supported.
 
 ---
 

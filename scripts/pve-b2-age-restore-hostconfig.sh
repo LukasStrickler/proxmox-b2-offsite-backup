@@ -92,6 +92,7 @@ if [[ -z "$ENC_NAME" ]]; then
 fi
 
 ENC_NAME=$(basename "$ENC_NAME")
+validate_backup_filename "$ENC_NAME" || exit 1
 
 local_enc="${restore_dir}/${ENC_NAME}"
 local_plain="${restore_dir}/${ENC_NAME%.age}"
@@ -112,6 +113,7 @@ fi
 echo "Decrypted host config backup: $local_plain"
 
 if [[ -n "$EXTRACT_TO" ]]; then
+    validate_path_safe "$EXTRACT_TO" "extract path" || exit 1
     mkdir -p "$EXTRACT_TO"
     echo "Extracting to $EXTRACT_TO..."
     tar -xaf "$local_plain" -C "$EXTRACT_TO"

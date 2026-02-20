@@ -72,27 +72,27 @@ KEEP_DAILY="${KEEP_DAILY:-7}"
 KEEP_MONTHLY="${KEEP_MONTHLY:-1}"
 KEEP_LOGS="${KEEP_LOGS:-30}"
 
-# Validate retention values (prevent negative/malicious values and leading zeros)
-# Use base-10 enforcement to prevent octal interpretation
-KEEP_DAILY=$((10#$KEEP_DAILY))
-KEEP_MONTHLY=$((10#$KEEP_MONTHLY))
-KEEP_LOGS=$((10#$KEEP_LOGS))
-if (( KEEP_DAILY < 1 )); then
-    log "ERROR: KEEP_DAILY must be a positive integer >= 1, got: $KEEP_DAILY"
-    exit 1
-fi
-if (( KEEP_MONTHLY < 1 )); then
-    log "ERROR: KEEP_MONTHLY must be a positive integer >= 1, got: $KEEP_MONTHLY"
-    exit 1
-fi
-if (( KEEP_LOGS < 1 )); then
-    log "ERROR: KEEP_LOGS must be a positive integer >= 1, got: $KEEP_LOGS"
-    exit 1
-fi
+# Validate retention values: first check they are numeric, then coerce to base-10
+# This ensures proper error messages even with set -e when values are non-numeric
+for var_name in KEEP_DAILY KEEP_MONTHLY KEEP_LOGS; do
+    value="${!var_name}"
+    # Require one or more digits; reject empty or non-numeric values
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        log "ERROR: $var_name must be a positive integer >= 1, got: '${value}'"
+        exit 1
+    fi
+    # Coerce to base-10 to avoid octal interpretation and write back
+    printf -v "$var_name" '%d' "$((10#$value))"
+    if (( ${!var_name} < 1 )); then
+        log "ERROR: $var_name must be a positive integer >= 1, got: ${!var_name}"
+        exit 1
+    fi
+done
 
 # Check dependencies
 need rclone
 need flock
+need jq
 
 # Create dedicated lock directory (root-only)
 LOCK_DIR="/run/pve-b2-age"

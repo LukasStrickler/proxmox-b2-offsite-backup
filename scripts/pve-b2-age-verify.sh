@@ -54,9 +54,11 @@ HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
 REMOTE_DIR="${REMOTE_BASE}/${TIER}"
 REMOTE_MANIFEST="${REMOTE_BASE}/manifest"
-# Use private temp directory to prevent symlink attacks
-WORKDIR="${VERIFY_WORKDIR:-/var/tmp/pve-b2-age-verify}"
+# Parent directory for temp files (a unique subdir will be created via mktemp)
+WORKDIR="${VERIFY_WORKDIR:-/var/tmp}"
 LOG="${LOG:-/var/log/pve-b2-age-verify.log}"
+
+validate_backup_filename "$ENC_NAME" || exit 1
 
 need rclone
 need age
@@ -68,16 +70,17 @@ if [[ ! -f "$AGE_IDENTITY" ]]; then
     exit 1
 fi
 
-# Create private temp directory (root-only, prevents symlink attacks)
-umask 077
-mkdir -p "$WORKDIR"
-chmod 700 "$WORKDIR"
+# Create unique temp directory (prevents symlink attacks, avoids chmod on shared dirs)
+tmpdir=$(mktemp -d "${WORKDIR}/pve-b2-age-verify-XXXXXX") || {
+    log "ERROR: Failed to create temp directory"
+    exit 1
+}
 
-local_enc="${WORKDIR}/${ENC_NAME}"
-local_plain="${WORKDIR}/${ENC_NAME%.age}"
+local_enc="${tmpdir}/${ENC_NAME}"
+local_plain="${tmpdir}/${ENC_NAME%.age}"
 manifest_name="${ENC_NAME%.age}.json.age"
-manifest_enc="${WORKDIR}/${manifest_name}"
-manifest_plain="${WORKDIR}/${manifest_name%.age}"
+manifest_enc="${tmpdir}/${manifest_name}"
+manifest_plain="${tmpdir}/${manifest_name%.age}"
 
 cleanup() {
     [[ -f "$manifest_enc" ]] && rm -f "$manifest_enc"
@@ -87,6 +90,7 @@ cleanup() {
         rm -f "$local_plain"
         log "Decrypted file deleted"
     fi
+    rmdir "$tmpdir" 2>/dev/null || true
 }
 trap cleanup EXIT
 

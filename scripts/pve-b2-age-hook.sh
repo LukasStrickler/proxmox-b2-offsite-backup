@@ -193,12 +193,18 @@ main() {
                         "$(sanitize_path "$daily_object")" \
                         "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1; then
                         log "Monthly backup copy created"
-                        rclone copyto --fast-list --transfers 4 --checkers 8 \
+                        if rclone copyto --fast-list --transfers 4 --checkers 8 \
                             "$(sanitize_path "$manifest_object")" \
-                            "$(sanitize_path "$monthly_manifest")" >>"$LOG" 2>&1 || \
-                            log "WARN: Monthly manifest copy failed"
+                            "$(sanitize_path "$monthly_manifest")" >>"$LOG" 2>&1; then
+                            log "Monthly manifest copy created"
+                        else
+                            log "ERROR: Monthly manifest copy failed, deleting inconsistent monthly backup copy"
+                            if ! rclone delete "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1; then
+                                log "WARN: Failed to delete inconsistent monthly backup copy: $monthly_object"
+                            fi
+                        fi
                     else
-                        log "WARN: Monthly copy failed"
+                        log "WARN: Monthly backup copy failed"
                     fi
                 fi
                 

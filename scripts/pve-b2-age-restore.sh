@@ -15,7 +15,7 @@ Usage: pve-b2-age-restore.sh <TIER> <ENCRYPTED_BACKUP> <NEW_VMID> [STORAGE]
 Arguments:
   tier            - "daily" or "monthly" (which backup tier to restore from)
   encrypted_backup - The encrypted backup filename (e.g., vzdump-qemu-101-2026_02_15-02_00_01.vma.zst.age)
-  new_vmid        - The new VMID/CTID to restore to (must not exist)
+  new_vmid        - The new VMID/CTID to restore to (must not exist; range: 100-999999999)
   storage         - Optional: target storage (default: auto-detect or local-lvm)
 
 Examples:
@@ -29,6 +29,7 @@ Examples:
   pve-b2-age-restore.sh daily vzdump-lxc-102-2026_02_15-02_00_01.tar.zst.age 202
 
 Note: The age private key must be available at AGE_IDENTITY in the config file.
+      VMID range: 100-999999999 (Proxmox default range; lower IDs are not supported).
 EOF
 }
 
@@ -48,28 +49,10 @@ ENC_NAME="$2"
 NEW_ID="$3"
 STORAGE="${4:-}"
 
-# Validate backup filename (prevent path traversal)
-if [[ "$ENC_NAME" =~ /|\.\. ]]; then
-    echo "ERROR: Backup filename contains invalid characters (path traversal detected)" >&2
-    exit 1
-fi
-# Extract just the filename to be safe
-ENC_NAME=$(basename "$ENC_NAME")
-if [[ ! "$ENC_NAME" =~ \.age$ ]]; then
-    echo "ERROR: Backup filename must end with .age" >&2
-    exit 1
-fi
+# Set LOG early so validation helpers can use log()
+LOG="${LOG:-/var/log/pve-b2-age-restore.log}"
 
-if ! [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: NEW_ID must be a positive integer, got: $NEW_ID" >&2
-    exit 1
-fi
-if (( 10#$NEW_ID < 100 || 10#$NEW_ID > 999999999 )); then
-    echo "ERROR: NEW_ID must be between 100 and 999999999, got: $NEW_ID" >&2
-    exit 1
-fi
-
-# Validate tier
+# Validate tier (before load_config for early error)
 if [[ "$TIER" != "daily" && "$TIER" != "monthly" ]]; then
     echo "ERROR: Tier must be 'daily' or 'monthly'" >&2
     exit 1
@@ -78,12 +61,20 @@ fi
 load_config || exit 1
 validate_config "RCLONE_REMOTE" "AGE_IDENTITY" || exit 1
 
+ENC_NAME=$(basename "$ENC_NAME")
+validate_backup_filename "$ENC_NAME" || exit 1
+
+validate_numeric "$NEW_ID" "NEW_ID" || exit 1
+if (( 10#$NEW_ID < 100 || 10#$NEW_ID > 999999999 )); then
+    log "ERROR: NEW_ID must be between 100 and 999999999, got: $NEW_ID"
+    exit 1
+fi
+
 HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
 REMOTE_DIR="${REMOTE_BASE}/${TIER}"
 REMOTE_MANIFEST="${REMOTE_BASE}/manifest"
 WORKDIR="${RESTORE_WORKDIR:-/var/lib/vz/dump}"
-LOG="${LOG:-/var/log/pve-b2-age-restore.log}"
 
 # Check dependencies
 need rclone

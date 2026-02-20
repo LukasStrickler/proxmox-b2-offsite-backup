@@ -100,7 +100,7 @@ check_disk_space() {
     fi
     
     local available_kb
-    available_kb=$(df -k "$target_dir" 2>/dev/null | awk 'NR==2 {print $4}')
+    available_kb=$(df -kP "$target_dir" 2>/dev/null | awk 'NR==2 {print $4}')
     
     if [[ -z "$available_kb" ]]; then
         log "ERROR: Could not determine available space for: $target_dir"
@@ -127,7 +127,8 @@ format_bytes() {
 }
 
 # Validate configuration file exists, is readable, and has correct ownership
-# Usage: load_config [config_path]
+# Uses hardcoded path: /etc/pve-b2-age-backup/config.env
+# Usage: load_config
 load_config() {
     local config_file="/etc/pve-b2-age-backup/config.env"
     
