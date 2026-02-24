@@ -41,7 +41,7 @@ Ensure you have access to:
 ### 1.2 Install Backup Tools
 ```bash
 # Install dependencies
-apt install -y rclone age jq curl git
+apt install -y rclone age jq curl git zstd sqlite3
 
 # Verify installation
 rclone --version && age --version
@@ -210,15 +210,18 @@ Once the system is stable, re-enable the backup schedule.
 
 ### Single File Recovery
 To recover a config file without restoring the whole VM:
-1.  **Download and decrypt** (or use `pve-b2-age-restore.sh` and stop before qmrestore):
+1.  **Download and decrypt manually**:
     ```bash
     rclone copyto b2:BUCKET/.../backup.age /tmp/backup.age
     age -d -i /etc/pve-b2-age-backup/age.key -o /tmp/backup.vma.zst /tmp/backup.age
     zstd -d -o /tmp/backup.vma /tmp/backup.vma.zst
+    mkdir -p /tmp/vma-extract /tmp/recovered
+    vma extract /tmp/backup.vma /tmp/vma-extract
     ```
 2.  **Extract file** (requires `libguestfs-tools`):
     ```bash
-    virt-copy-out -a /tmp/backup.vma /etc/important.conf /tmp/recovered/
+    # Replace drive-scsi0.raw with the extracted disk you need
+    virt-copy-out -a /tmp/vma-extract/drive-scsi0.raw /etc/important.conf /tmp/recovered/
     ```
 
 ## 9. Emergency Contacts

@@ -85,6 +85,7 @@ b2:BUCKET/proxmox/HOSTNAME/
 - `HOSTNAME`: Target hostname
 - `DUMPDIR`: Backup directory
 - `STOREID`: Storage ID
+- Hook phase itself is passed as positional argument `$1` (e.g. `backup-start`, `backup-end`, `log-end`, `backup-abort`), not as an environment variable.
 
 ### Age Encryption Patterns
 - Use recipient file (`-R recipients.txt`) for encryption
@@ -96,7 +97,7 @@ b2:BUCKET/proxmox/HOSTNAME/
 - Use `--b2-hard-delete` for permanent deletion in prune operations
 - Use `--fast-list` for efficient listing (reduces API calls)
 - Use `--streaming-upload-cutoff` to control RAM usage
-- Default retention: use B2 lifecycle rules + prune script
+- Retention: Per-VM retention via prune script (KEEP_DAILY/KEEP_MONTHLY per VM ID)
 
 ### Retry Logic
 - Exponential backoff: `delay = BASE_BACKOFF * (2 ^ (attempt - 1))`

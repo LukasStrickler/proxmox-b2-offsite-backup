@@ -52,8 +52,8 @@ if ! [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
     echo "ERROR: NEW_ID must be a positive integer, got: $NEW_ID" >&2
     exit 1
 fi
-if (( 10#$NEW_ID < 1 || 10#$NEW_ID > 999999999 )); then
-    echo "ERROR: NEW_ID must be between 1 and 999999999, got: $NEW_ID" >&2
+if (( 10#$NEW_ID < 100 || 10#$NEW_ID > 999999999 )); then
+    echo "ERROR: NEW_ID must be between 100 and 999999999, got: $NEW_ID" >&2
     exit 1
 fi
 
@@ -122,7 +122,9 @@ log "Target VMID: $NEW_ID"
 [[ -n "$STORAGE" ]] && log "Target Storage: $STORAGE"
 
 # Check if target VMID already exists
-if qm status "$NEW_ID" >/dev/null 2>&1 || pct status "$NEW_ID" >/dev/null 2>&1; then
+if [[ -e "/etc/pve/qemu-server/${NEW_ID}.conf" || -e "/etc/pve/lxc/${NEW_ID}.conf" ]] || \
+   qm status "$NEW_ID" >/dev/null 2>&1 || \
+   pct status "$NEW_ID" >/dev/null 2>&1; then
     log "ERROR: Target VMID $NEW_ID already exists"
     exit 1
 fi

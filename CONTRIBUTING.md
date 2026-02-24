@@ -138,6 +138,6 @@ Report security issues via [GitHub Issues](https://github.com/LukasStrickler/pro
 - **Issues**: Bug reports and feature requests.
 - **Discussions**: General questions and ideas.
 
-Contributors will be listed in `CONTRIBUTORS.md` and release notes.
+Contributors are recognized in commit history and release notes.
 
 Thank you for improving PVE B2 Age Backup!

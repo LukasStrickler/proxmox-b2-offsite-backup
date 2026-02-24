@@ -13,6 +13,7 @@ source "${SCRIPT_DIR}/../lib/common.sh" 2>/dev/null || source "/usr/local/lib/pv
 PHASE="${1:-}"
 MODE="${2:-}"
 VMID="${3:-}"
+MANIFEST_TEMP=""
 
 # Load configuration
 load_config || exit 1
@@ -30,12 +31,13 @@ if [[ ! -r "$AGE_RECIPIENTS" ]]; then
     exit 1
 fi
 
-HOST="${HOST:-$(hostname -s)}"
+HOST="${HOST:-${HOSTNAME:-$(hostname -s)}}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
 REMOTE_DAILY="${REMOTE_BASE}/daily"
 REMOTE_MONTHLY="${REMOTE_BASE}/monthly"
 REMOTE_LOGS="${REMOTE_BASE}/logs"
 REMOTE_MANIFEST="${REMOTE_BASE}/manifest"
+ACTIVE_MARKER="${DUMPDIR}/.pve-b2-age-active"
 
 # Check dependencies
 need age
@@ -62,44 +64,95 @@ staging_busy() {
     [[ "$count" -gt 0 ]]
 }
 
+create_staging_marker() {
+    [[ "${ALLOW_CONCURRENT_STAGING:-false}" == "true" ]] && return 0
+    printf 'vmid=%s mode=%s ts=%s\n' "${VMID:-unknown}" "${MODE:-unknown}" "$(date -Is)" > "$ACTIVE_MARKER" || {
+        log "ERROR: Failed to create staging marker: $ACTIVE_MARKER"
+        exit 1
+    }
+}
+
+clear_staging_marker() {
+    [[ "${ALLOW_CONCURRENT_STAGING:-false}" == "true" ]] && return 0
+    rm -f "$ACTIVE_MARKER" 2>/dev/null || true
+}
+
+cleanup_backup_end() {
+    clear_staging_marker
+    [[ -n "$MANIFEST_TEMP" && -f "$MANIFEST_TEMP" ]] && rm -f "$MANIFEST_TEMP"
+}
+
+upload_encrypted_stream_once() {
+    local src_file="$1"
+    local remote_path="$2"
+
+ age -R "$AGE_RECIPIENTS" "$src_file" | \
+    rclone rcat \
+    --streaming-upload-cutoff "${RCAT_CUTOFF:-8M}" \
+    --retries 5 \
+    --retries-sleep 10s \
+    --low-level-retries 15 \
+    --timeout 5m \
+    --contimeout 1m \
+    "$(sanitize_path "$remote_path")"
+}
+
 upload_encrypted_stream() {
     local src_file="$1"
     local remote_path="$2"
     local filename
     filename=$(basename "$src_file")
-    
+
     log "Uploading encrypted: $filename -> $remote_path"
-    
-    local rclone_cmd="age -R \"$AGE_RECIPIENTS\" \"$src_file\" | rclone rcat"
-    rclone_cmd+=" --fast-list"
-    rclone_cmd+=" --streaming-upload-cutoff \"${RCAT_CUTOFF:-8M}\""
-    rclone_cmd+=" --transfers 4"
-    rclone_cmd+=" --checkers 8"
-    rclone_cmd+=" --retries 5"
-    rclone_cmd+=" --retries-sleep 10s"
-    rclone_cmd+=" --low-level-retries 15"
-    rclone_cmd+=" --timeout 5m"
-    rclone_cmd+=" --contimeout 1m"
-    rclone_cmd+=" \"$(sanitize_path "$remote_path")\""
-    
-    retry_with_backoff "$rclone_cmd" "${UPLOAD_ATTEMPTS:-6}" "${BASE_BACKOFF:-20}"
+
+    retry_with_backoff_fn upload_encrypted_stream_once "${UPLOAD_ATTEMPTS:-6}" "${BASE_BACKOFF:-20}" "$src_file" "$remote_path"
 }
 
 main() {
     case "$PHASE" in
         backup-start)
+            if [[ -f "$ACTIVE_MARKER" ]]; then
+                if staging_busy; then
+                    local marker_state
+                    marker_state=$(cat "$ACTIVE_MARKER" 2>/dev/null || echo "unknown")
+                    log "ERROR: Staging marker present: $marker_state"
+                    log "ERROR: Another backup is already active for this staging area"
+                    exit 1
+                else
+                    local now marker_mtime marker_age max_marker_age marker_state
+                    now=$(date +%s)
+                    marker_mtime=$(stat -c '%Y' "$ACTIVE_MARKER" 2>/dev/null || echo 0)
+                    marker_age=$(( now - marker_mtime ))
+                    max_marker_age="${STAGING_MARKER_MAX_AGE:-21600}"
+                    marker_state=$(cat "$ACTIVE_MARKER" 2>/dev/null || echo "unknown")
+                    if (( marker_age > max_marker_age )); then
+                        log "WARNING: Found stale staging marker (${marker_age}s old): $marker_state"
+                        log "WARNING: Clearing stale marker: $ACTIVE_MARKER"
+                        clear_staging_marker
+                    else
+                        log "ERROR: Recent staging marker present (${marker_age}s old): $marker_state"
+                        log "ERROR: Another backup may be starting; refusing concurrent staging"
+                        exit 1
+                    fi
+                fi
+            fi
             if staging_busy; then
                 log "ERROR: Staging busy — another backup file already in $DUMPDIR (upload in progress or leftover). Only one backup at a time; schedule jobs so the next starts after the previous has finished and space is freed."
                 exit 1
             fi
+            create_staging_marker
             log "Backup started for VM/CT $VMID"
             ;;
             
         backup-end)
+            trap cleanup_backup_end EXIT
             # TARGET exists only at backup-end
             SRC="${TARGET:-${TARFILE:-}}"
             if [[ -z "$SRC" || ! -f "$SRC" ]]; then
                 log "ERROR: TARGET/TARFILE missing or not a file: '${SRC:-<unset>}'"
+                if [[ -n "${TARGET:-}" && ! -f "${TARGET}" ]]; then
+                    log "ERROR: TARGET is not a local file path. This hook requires file-based vzdump staging (DUMPDIR) and is not compatible with PBS stream targets."
+                fi
                 exit 1
             fi
             
@@ -114,10 +167,7 @@ main() {
             created_date=$(date -Is)
             
             # Create manifest (for integrity verification during restore)
-            local manifest_temp
-            manifest_temp=$(mktemp)
-            # shellcheck disable=SC2064
-            trap "rm -f '$manifest_temp'" EXIT
+            MANIFEST_TEMP=$(mktemp)
             
             jq -n \
                 --arg vmid "$VMID" \
@@ -127,7 +177,7 @@ main() {
                 --arg sha256 "$sha256_hash" \
                 --arg created "$created_date" \
                 --arg mode "$MODE" \
-                '{vmid: $vmid, host: $host, file: $file, size_bytes: $size_bytes, sha256: $sha256, created: $created, mode: $mode}' > "$manifest_temp"
+                '{vmid: $vmid, host: $host, file: $file, size_bytes: $size_bytes, sha256: $sha256, created: $created, mode: $mode}' > "$MANIFEST_TEMP"
             
             local manifest_object="${REMOTE_MANIFEST}/${base_filename}.json.age"
             
@@ -138,7 +188,7 @@ main() {
                 
                 # Upload manifest
                 local manifest_ok=false
-                if upload_encrypted_stream "$manifest_temp" "$manifest_object"; then
+                if upload_encrypted_stream "$MANIFEST_TEMP" "$manifest_object"; then
                     log "Manifest upload successful"
                     manifest_ok=true
                 else
@@ -182,6 +232,7 @@ main() {
             ;;
             
         backup-abort)
+            clear_staging_marker
             log "Backup aborted for VM/CT $VMID"
             if [[ -n "$VMID" && -n "${DUMPDIR:-}" ]]; then
                 shopt -s nullglob

@@ -67,9 +67,23 @@ check_dependencies() {
             pass "$dep installed"
             info "$(command -v "$dep")"
         else
-            fail "$dep not found - install with: apt install $dep"
+            local pkg
+            case "$dep" in
+                flock) pkg="util-linux" ;;
+                sha256sum) pkg="coreutils" ;;
+                *) pkg="$dep" ;;
+            esac
+            fail "$dep not found - install with: apt install $pkg"
         fi
     done
+
+    if command -v sqlite3 >/dev/null 2>&1; then
+        pass "sqlite3 installed (consistent hostconfig snapshot)"
+        info "$(command -v sqlite3)"
+    else
+        warn "sqlite3 not found (hostconfig falls back to file-level config.db copy)"
+        info "Install recommended: apt install sqlite3"
+    fi
 }
 
 check_config_file() {
@@ -94,7 +108,11 @@ check_config_file() {
     
     # Source and check required variables
     # shellcheck source=/dev/null
-    source "$config_file" 2>/dev/null || true
+    if ! source "$config_file" 2>/dev/null; then
+        fail "Config file could not be parsed: $config_file"
+        info "Check syntax and quoting in config file"
+        return
+    fi
     
     local required_vars=("RCLONE_REMOTE" "AGE_RECIPIENTS")
     for var in "${required_vars[@]}"; do
@@ -124,7 +142,8 @@ check_rclone_config() {
     
     local remote_name="${RCLONE_REMOTE%%:*}"
     
-    if rclone config show "$remote_name" >/dev/null 2>&1; then
+    if rclone config show "$remote_name" >/dev/null 2>&1 || \
+       rclone listremotes 2>/dev/null | grep -Fxq "$remote_name:"; then
         pass "Rclone remote '$remote_name' is configured"
         info "Remote: $RCLONE_REMOTE"
     else
@@ -152,7 +171,7 @@ check_age_keys() {
         fi
     else
         fail "Recipients file not found: $recipients_file"
-        info "Generate with: age-keygen -o age.key && grep -oE 'age1[0-9a-z]+' age.key > recipients.txt"
+        info "Generate with: age-keygen -o age.key && age-keygen -y age.key > recipients.txt"
     fi
     
     # Check identity (private key) - optional for backup host
@@ -229,7 +248,7 @@ check_systemd_timers() {
     local timers=("pve-b2-age-prune.timer" "pve-b2-age-hostconfig.timer")
     
     for timer in "${timers[@]}"; do
-        if systemctl list-unit-files "$timer" >/dev/null 2>&1; then
+        if systemctl list-unit-files --type=timer --no-legend "$timer" 2>/dev/null | awk '{print $1}' | grep -Fxq "$timer"; then
             if systemctl is-enabled "$timer" >/dev/null 2>&1; then
                 pass "$timer is enabled"
             else

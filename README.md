@@ -19,7 +19,7 @@ A **backup hook** for Proxmox VE: when a backup finishes, Proxmox runs our scrip
 
 | | |
 |:---|:---|
-| **Streaming encryption** | No plaintext persists on disk |
+| **Streaming encryption** | Plaintext is removed after successful backup + manifest upload |
 | **SHA256 verification** | Manifest-based integrity checks |
 | **Flexible retention** | N daily + monthly copies |
 | **Systemd integration** | Prune and hostconfig timers |
@@ -74,10 +74,10 @@ sudo ./uninstall.sh
 
 | Requirement | Details |
 |:---|:---|
-| Proxmox VE | 7.x or 8.x (restore uses `qmrestore`, `pct`) |
+| Proxmox VE | 7.x, 8.x, or 9.x (restore uses `qmrestore`, `pct`) |
 | Local storage | Largest VM + ~10% for staging |
 | Backblaze B2 | Bucket + Application Key |
-| **Runtime dependencies** | **rclone**, **age**, **jq**, **zstd** — installed by install script if missing. **flock**, **sha256sum**, **tar** — from util-linux/coreutils (standard on Debian/Proxmox). **curl** — install-only. |
+| **Runtime dependencies** | **rclone**, **age**, **jq**, **zstd**, **sqlite3** — installed by install script if missing. **flock**, **sha256sum**, **tar** — from util-linux/coreutils (standard on Debian/Proxmox). **curl** — install-only. |
 
 ## Documentation
 
@@ -95,7 +95,7 @@ sudo ./uninstall.sh
 ## Security
 
 - **Age encryption** — Public keys for backup; private key only for restore. [age](https://github.com/FiloSottile/age)
-- **Least privilege** — Backup host cannot decrypt; restore on a separate machine if needed.
+- **Least privilege** — Keep `AGE_IDENTITY` off the backup host except during restore/verify windows.
 - **Multiple recipients** — Redundancy and key rotation supported.
 - **Reporting** — Issues? [GitHub Issues](https://github.com/LukasStrickler/proxmox-b2-offsite-backup/issues)
 

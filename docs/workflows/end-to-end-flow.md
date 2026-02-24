@@ -91,7 +91,7 @@ High-level sequence; details in [Disaster Recovery](disaster-recovery.md).
 | **install.sh** | Install deps, scripts, systemd, config template, optional age keys |
 | **pve-b2-age-hook.sh** | Encrypt and upload backup + manifest; delete local; monthly copy on 1st |
 | **pve-b2-age-prune.sh** | Delete excess daily/monthly/logs on B2; rclone cleanup |
-| **pve-b2-age-hostconfig.sh** | Tar /etc, pve-cluster, /root; encrypt and upload to B2 |
+| **pve-b2-age-hostconfig.sh** | Tar /etc, pve-cluster, /root, /usr/local/sbin, /usr/local/bin; include consistent `config.db` snapshot when possible; encrypt and upload to B2 |
 | **pve-b2-age-list.sh** | List backups (daily, monthly, logs, manifest, hostconfig, or all) |
 | **pve-b2-age-verify.sh** | Download, decrypt, and verify SHA256 of a backup |
 | **pve-b2-age-restore.sh** | Download, decrypt, verify, and run qmrestore/pct for one VM/CT |

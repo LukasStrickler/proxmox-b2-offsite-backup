@@ -17,12 +17,12 @@ If the check passes but issues persist, consult the specific sections below.
 ## 🔧 Installation & Configuration
 
 ### "Command not found" or "Dependency missing"
-**Problem**: Required packages (`rclone`, `age`, `jq`) are not installed.
+**Problem**: Required packages (`rclone`, `age`, `jq`, `zstd`, `sqlite3`) are not installed.
 **Fix**:
 ```bash
-sudo apt update && sudo apt install -y rclone age jq
+sudo apt update && sudo apt install -y rclone age jq zstd sqlite3
 # Verify
-which rclone age jq
+which rclone age jq zstd sqlite3
 ```
 
 ### "Configuration file not found" or Permission Denied
@@ -48,7 +48,7 @@ Then edit `config.env` and set at least `RCLONE_REMOTE` and `DUMPDIR`.
 # Generate keys if completely missing
 sudo age-keygen -o /etc/pve-b2-age-backup/age.key
 sudo chmod 600 /etc/pve-b2-age-backup/age.key
-sudo grep -oE 'age1[0-9a-z]+' /etc/pve-b2-age-backup/age.key > /etc/pve-b2-age-backup/recipients.txt
+sudo age-keygen -y /etc/pve-b2-age-backup/age.key > /etc/pve-b2-age-backup/recipients.txt
 sudo chmod 644 /etc/pve-b2-age-backup/recipients.txt
 ```
 
@@ -84,6 +84,7 @@ sudo rclone config
 1. Check `/etc/pve/jobs.cfg` to ensure `script: /usr/local/sbin/pve-b2-age-hook.sh` is set.
 2. Check Proxmox task logs (`/var/log/pve/tasks/`) for `vzdump` errors *before* the hook ran.
 3. Ensure the backup storage has space.
+4. If this job targets **Proxmox Backup Server (PBS)** storage, this hook is not compatible because PBS does not provide a local backup file path for encryption/upload.
 
 ### "Staging busy" / backup fails at backup-start
 **Problem**: Hook logs *"Staging busy — another backup file already in DUMPDIR"*. Staging is sized for one backup at a time; a second job started while the first file was still on disk (upload in progress or leftover).
@@ -217,6 +218,12 @@ sudo rclone lsf b2:
 **Fix**:
 - Retry logic usually handles this.
 - Increase `BASE_BACKOFF` in `config.env` (e.g., `BASE_BACKOFF=30`).
+
+### List output looks stale right after upload/prune
+**Problem**: Object listings may lag briefly behind writes/deletes on B2.
+**Fix**:
+- Wait 10-60 seconds and re-run `pve-b2-age-list.sh`.
+- Treat manifest/hash verification as the source of truth for restore readiness.
 
 ### "Signature mismatch" or Auth Errors
 **Problem**: B2 credentials invalid or clock skew.

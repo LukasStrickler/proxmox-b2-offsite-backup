@@ -94,7 +94,9 @@ sudo pve-b2-age-prune.sh
 
 ## Host Configuration Backup
 
-Archives `/etc`, `/var/lib/pve-cluster`, and `/root` to B2.
+Archives `/etc`, `/var/lib/pve-cluster`, `/root`, `/usr/local/sbin`, and `/usr/local/bin` to B2.
+When `sqlite3` is available, it stores a consistent snapshot of `config.db`
+inside the archive before upload.
 
 ### Schedule
 Runs automatically via `pve-b2-age-hostconfig.timer` (Default: Sundays at 07:00).
@@ -135,14 +137,15 @@ sudo bash -n /usr/local/sbin/pve-b2-age-hook.sh
 # List remote bucket contents
 sudo rclone lsf b2:YOUR_BUCKET_NAME
 
-# Check API limits/status
-sudo rclone about b2:
+# Verify remote is reachable and bucket listing works
+sudo rclone lsd b2:
 ```
 
 ### Common Error Patterns
 - **"No space left on device"**: Staging partition full. Clean up `/backup/vzdump`.
 - **"Upload failed"**: Check internet connection or B2 credentials.
 - **"Age encryption failed"**: Verify `recipients.txt` permissions and content.
+- **Recent backup not visible yet**: Wait briefly and list again; object listings can lag right after write/delete.
 
 > **Full Guide**: See [Common Issues](../troubleshooting/common-issues.md) for detailed solutions.
 

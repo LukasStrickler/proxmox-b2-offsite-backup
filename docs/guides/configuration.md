@@ -15,11 +15,12 @@ Reference for all options in `config.env`. After installation, edit `/etc/pve-b2
 | `RCLONE_REMOTE` | **Yes** | - | B2 remote and bucket (e.g., `b2:MY_BUCKET`) |
 | `DUMPDIR` | **Yes** | `/backup/vzdump` | Local staging for Proxmox backups |
 | `AGE_RECIPIENTS` | **Yes** | `/etc.../recipients.txt` | File with public keys for encryption |
-| `AGE_IDENTITY` | **Yes** | `/etc.../age.key` | Private key (restore only) |
+| `AGE_IDENTITY` | No | `/etc.../age.key` | Private key (required for restore/verify) |
 | `REMOTE_PREFIX` | No | `proxmox` | Subfolder in B2 bucket |
 | `HOST` | No | `hostname -s` | Hostname segment in remote path |
 | `ALLOW_CONCURRENT_STAGING` | No | `false` | Allow multiple backup files in DUMPDIR (see staging note) |
-| `KEEP_DAILY` | No | `7` | Days to keep |
+| `STAGING_MARKER_MAX_AGE` | No | `21600` | Seconds before an empty staging marker is treated as stale |
+|| `KEEP_DAILY` | No | `7` | Number of daily backups per VM to keep |
 | `RCAT_CUTOFF` | No | `8M` | Upload buffer size |
 
 ---
@@ -94,6 +95,15 @@ Allow more than one backup file in `DUMPDIR` at a time (default: `false`).
 - **Default**: `false` — the hook fails **backup-start** if any other backup file is already in `DUMPDIR`. This enforces **one backup at a time**: space is only freed after upload in **backup-end**, so with limited staging (e.g. 100GB) you must not start the next job until the previous one has finished and the hook has deleted the local file.
 - **Set to `true`** only if your staging is large enough to hold multiple full backups (e.g. 500GB for several 80GB VMs). Otherwise overlapping jobs will fill the disk.
 
+#### STAGING_MARKER_MAX_AGE
+Age threshold for clearing a stale staging marker when no backup files exist.
+```bash
+STAGING_MARKER_MAX_AGE=21600
+```
+- **Default**: `21600` seconds (6 hours).
+- **When used**: Only when `ALLOW_CONCURRENT_STAGING=false`.
+- **Purpose**: Prevents false startup blocks after abnormal interruptions while still blocking overlapping backup starts.
+
 ### Retention Policy
 
 Controls how many backups are kept on B2. Pruning runs daily via `pve-b2-age-prune.service`.
@@ -116,6 +126,7 @@ BASE_BACKOFF=20
 ```
 
 - **RCAT_CUTOFF**: Rclone streaming buffer. Higher values (e.g., `128M`) use more RAM but reduce API calls.
+- **Why `8M` here?** Rclone's built-in default is much lower (`100KiB`), but this project defaults to `8M` to better match B2 multipart behavior and reduce tiny-part churn on large backup streams.
 - **UPLOAD_ATTEMPTS**: Number of retries if upload fails.
 - **BASE_BACKOFF**: Base seconds for exponential backoff (20s, 40s, 80s...).
 
@@ -151,7 +162,7 @@ WORKDIR="/var/tmp"
 LOG="/var/log/pve-b2-age.log"
 ```
 - Main log file for hook and scripts.
-- Log rotation is handled by system logrotate (if installed via install script).
+- Log rotation is not configured by `install.sh`; configure `logrotate`/journald policy as needed.
 
 ---
 

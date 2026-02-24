@@ -1,6 +1,8 @@
 [Unit]
 Description=PVE B2 Age Host Config Backup
 Documentation=https://github.com/LukasStrickler/proxmox-b2-offsite-backup
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=oneshot
@@ -8,7 +10,7 @@ ExecStart=/usr/local/sbin/pve-b2-age-hostconfig.sh
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pve-b2-age-hostconfig
-Restart=on-failure
+Restart=no
 RestartSec=5
 
 # Security hardening

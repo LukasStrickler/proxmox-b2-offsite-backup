@@ -4,7 +4,7 @@ Get PVE B2 Age Backup running in 10 minutes.
 
 ## Prerequisites
 
-- **Proxmox VE** 7.x or 8.x with root (or sudo) access
+- **Proxmox VE** 7.x, 8.x, or 9.x with root (or sudo) access
 - **Backblaze B2** account: create a **Bucket** (private) and an **Application Key** (Read and Write) in [Backblaze B2](https://www.backblaze.com/b2/cloud-storage.html) → Application Keys
 - **Local staging space**: a directory with free space at least as large as your largest VM plus 10% (Proxmox writes the backup here temporarily; the hook then encrypts and uploads it to B2 and deletes the local file)
 
@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/LukasStrickler/proxmox-b2-offsite-b
 
 ```bash
 sudo rclone config
-# n (new), name: b2, type: 5 (B2), Account: KEY_ID, Key: APPLICATION_KEY, defaults for rest
+# n (new), name: b2, type: b2, Account: KEY_ID, Key: APPLICATION_KEY, defaults for rest
 ```
 Use the **Application Key ID** as "Account", not the main B2 Account ID.  
 *Tip: When asked about advanced config, set `b2-hard-delete` to `false`.*
@@ -114,7 +114,7 @@ sudo pve-b2-age-restore.sh daily BACKUP_FILENAME 999
 | **Staging** | The folder (`DUMPDIR`) where Proxmox writes the backup file before the hook uploads it. Only one backup at a time needs to fit here. |
 | **Hook** | The script Proxmox runs after a backup (encrypt + upload to B2 + delete local file). |
 | **Prune** | A scheduled job that deletes old backups on B2 so you keep only the last N daily/monthly. |
-| **Host config** | A weekly backup of `/etc`, `/var/lib/pve-cluster`, and `/root` to B2 (for disaster recovery). |
+| **Host config** | A weekly backup of `/etc`, `/var/lib/pve-cluster`, `/root`, `/usr/local/sbin`, and `/usr/local/bin` to B2 (for disaster recovery), including a consistent `config.db` snapshot when `sqlite3` is available. |
 
 ## Next Steps
 

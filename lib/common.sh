@@ -30,7 +30,11 @@ need() {
 
 # Sanitize paths to remove double slashes
 sanitize_path() {
-    echo "$1" | sed 's#//*#/#g'
+    local path="$1"
+    while [[ "$path" == *"//"* ]]; do
+        path="${path//\/\//\/}"
+    done
+    printf '%s\n' "$path"
 }
 
 # Retry a command with exponential backoff
@@ -62,6 +66,37 @@ retry_with_backoff() {
     done
 }
 
+retry_with_backoff_fn() {
+    local fn="$1"
+    local max_attempts="${2:-6}"
+    local base_delay="${3:-20}"
+    local attempt=1
+    shift 3
+
+    if ! declare -F "$fn" >/dev/null 2>&1; then
+        log "ERROR: Retry target is not a function: $fn"
+        return 1
+    fi
+
+    while true; do
+        log "Attempt $attempt/$max_attempts: $fn"
+
+        if "$fn" "$@" >>"${LOG:-/dev/null}" 2>&1; then
+            return 0
+        fi
+
+        if (( attempt >= max_attempts )); then
+            log "ERROR: All $max_attempts attempts failed for $fn"
+            return 1
+        fi
+
+        local delay=$(( base_delay * (2 ** (attempt - 1)) ))
+        log "Failed, waiting ${delay}s before retry..."
+        sleep "$delay"
+        attempt=$(( attempt + 1 ))
+    done
+}
+
 # Validate configuration file exists and is readable
 # Usage: load_config [config_path]
 load_config() {
@@ -78,7 +113,10 @@ load_config() {
     fi
     
     # shellcheck source=/dev/null
-    source "$config_file"
+    if ! source "$config_file"; then
+        echo "ERROR: Failed to parse configuration file: $config_file" >&2
+        return 1
+    fi
 }
 
 # Validate required configuration variables

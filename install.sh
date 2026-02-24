@@ -131,7 +131,7 @@ check_dependencies() {
     info "Checking dependencies..."
     
     local missing=()
-    local deps=("rclone" "age" "jq" "curl" "zstd")
+    local deps=("rclone" "age" "jq" "curl" "zstd" "sqlite3")
 
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" >/dev/null 2>&1; then
@@ -143,6 +143,7 @@ check_dependencies() {
                 age) version=$(age --version 2>&1 || echo "installed") ;;
                 jq) version=$(jq --version 2>&1) ;;
                 zstd) version=$(zstd --version 2>&1 | head -1 || echo "installed") ;;
+                sqlite3) version=$(sqlite3 --version 2>&1 | awk '{print $1}') ;;
                 *) version="installed" ;;
             esac
             log "  ✓ $dep: $version"
@@ -330,7 +331,7 @@ generate_age_key() {
         age-keygen -o "$key_file" 2>&1 | tee -a "$LOG_FILE"
         chmod 600 "$key_file"
         
-        grep -oE 'age1[0-9a-z]+' "$key_file" > "$recipients_file"
+        age-keygen -y "$key_file" > "$recipients_file"
         chmod 644 "$recipients_file"
         KEYS_GENERATED=true
         

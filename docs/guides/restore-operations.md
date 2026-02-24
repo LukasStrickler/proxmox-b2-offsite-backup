@@ -118,14 +118,16 @@ Restore a backup created on `SOURCE_HOST` to `TARGET_HOST`.
 Extract a specific file from a backup without a full VM/CT restore.
 
 ```bash
-# 1. Download and decrypt backup (use pve-b2-age-restore.sh to get plaintext, then stop before qmrestore/pct)
-#    Or manually:
+# 1. Download and decrypt backup manually:
 #    rclone copyto b2:BUCKET/.../backup.age /tmp/backup.age
 #    age -d -i /etc/pve-b2-age-backup/age.key -o /tmp/backup.vma.zst /tmp/backup.age
 
-# 2. Extract file from VM backup (VMA format; requires zstd and libguestfs-tools)
+# 2. Extract file from VM backup (VMA format; requires zstd, vma, and libguestfs-tools)
 zstd -d -o /tmp/backup.vma /tmp/backup.vma.zst
-virt-copy-out -a /tmp/backup.vma /etc/passwd /tmp/recovered/
+mkdir -p /tmp/vma-extract /tmp/recovered
+vma extract /tmp/backup.vma /tmp/vma-extract
+# Select the extracted disk image (example: drive-scsi0.raw)
+virt-copy-out -a /tmp/vma-extract/drive-scsi0.raw /etc/passwd /tmp/recovered/
 
 # 3. Extract file from container backup (tar)
 tar -xaf /tmp/backup.tar.zst -C /tmp/recovered ./etc/passwd

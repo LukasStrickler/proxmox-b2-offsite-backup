@@ -5,7 +5,6 @@ set -euo pipefail
 # Removes all installed files and optionally configuration
 # Usage: sudo bash uninstall.sh (or chmod +x uninstall.sh && sudo ./uninstall.sh)
 
-REPO_URL="https://github.com/LukasStrickler/proxmox-b2-offsite-backup"
 INSTALL_DIR="/opt/pve-b2-age-backup"
 CONFIG_DIR="/etc/pve-b2-age-backup"
 BIN_DIR="/usr/local/sbin"
@@ -81,7 +80,7 @@ rm -f "$LOG_FILE"
 
 rm -f /var/log/pve-b2-age.log 2>/dev/null || true
 rm -f /var/log/pve-b2-age-restore.log 2>/dev/null || true
-
+rm -f /var/log/pve-b2-age-verify.log 2>/dev/null || true
 echo ""
 log "Uninstall complete!"
 echo ""
