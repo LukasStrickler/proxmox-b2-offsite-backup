@@ -178,7 +178,10 @@ delete_excess_per_vmid() {
   
   # Get all .age files with their modification times
   local all_files
-  all_files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | "\(.ModTime)|\(.Name)"' 2>/dev/null)
+  if ! all_files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | "\(.ModTime)|\(.Name)"'); then
+    log "  ERROR: Failed to parse file list from rclone output"
+    return 1
+  fi
   
   if [[ -z "$all_files" ]]; then
     log "  No matching files found"
@@ -250,8 +253,15 @@ delete_excess_per_vmid() {
           if [[ -n "$manifest_dir" ]]; then
             local manifest_file="${manifest_dir}/${file%.age}.json.age"
             if (( manifest_remaining <= 0 )); then
+              # Delete manifest from current tier
               rclone deletefile --b2-hard-delete "$manifest_file" >>"$LOG" 2>&1 || \
                 log "      WARNING: Failed to delete manifest (may not exist)"
+              # Also delete from central manifest directory if pruning monthly
+              # This prevents orphaned manifests when same backup existed in both tiers
+              if [[ "$manifest_dir" == "$REMOTE_MONTHLY" && -n "$REMOTE_MANIFEST" ]]; then
+                local central_manifest="${REMOTE_MANIFEST}/${file%.age}.json.age"
+                rclone deletefile --b2-hard-delete "$central_manifest" >>"$LOG" 2>&1 || true
+              fi
             else
               log "      Keeping manifest (still referenced by another tier)"
             fi
