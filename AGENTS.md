@@ -190,7 +190,7 @@ b2:BUCKET/proxmox/HOSTNAME/
 
 ### Required Packages
 ```bash
-apt install -y rclone age jq
+apt install -y rclone age jq zstd sqlite3
 ```
 
 ### Rclone Configuration

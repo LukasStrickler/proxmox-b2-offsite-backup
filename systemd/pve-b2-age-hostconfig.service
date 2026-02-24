@@ -8,7 +8,7 @@ ExecStart=/usr/local/sbin/pve-b2-age-hostconfig.sh
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pve-b2-age-hostconfig
-Restart=on-failure
+Restart=no
 RestartSec=5
 
 # Security hardening

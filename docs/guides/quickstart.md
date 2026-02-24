@@ -4,13 +4,13 @@ Get PVE B2 Age Backup running in 10 minutes.
 
 ## Prerequisites
 
-- **Proxmox VE** 7.x or 8.x with root (or sudo) access
+- **Proxmox VE** 7.x, 8.x, or 9.x with root (or sudo) access
 - **Backblaze B2** account: create a **Bucket** (private) and an **Application Key** (Read and Write) in [Backblaze B2](https://www.backblaze.com/b2/cloud-storage.html) → Application Keys
 - **Local staging space**: a directory with free space at least as large as your largest VM plus 10% (Proxmox writes the backup here temporarily; the hook then encrypts and uploads it to B2 and deletes the local file)
 
 ## Step 1: Install
 
-The installer sets up scripts, config, systemd units, and dependencies (`rclone`, `age`, `jq`). When it generates encryption keys, **download and securely store them** (see Step 3) so you can restore backups later.
+The installer sets up scripts, config, systemd units, and dependencies (`rclone`, `age`, `jq`, `zstd`, `sqlite3`). When it generates encryption keys, **download and securely store them** (see Step 3) so you can restore backups later.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/LukasStrickler/proxmox-b2-offsite-backup/main/install.sh | sudo bash
