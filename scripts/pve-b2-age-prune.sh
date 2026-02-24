@@ -106,7 +106,13 @@ declare -A manifest_refs=()
 index_manifest_refs() {
   local remote_dir="$1"
   local files file
-  files=$(rclone lsf --files-only "$remote_dir" 2>/dev/null || true)
+  
+  # Fail-closed: error if we can't list the directory
+  if ! files=$(rclone lsf --files-only "$remote_dir" 2>&1); then
+    log "ERROR: Failed to list $remote_dir: $files"
+    return 1
+  fi
+  
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
     [[ "$file" == *.age ]] || continue
@@ -114,8 +120,15 @@ index_manifest_refs() {
   done <<< "$files"
 }
 
-index_manifest_refs "$REMOTE_DAILY"
-index_manifest_refs "$REMOTE_MONTHLY"
+# Index manifest references - abort if either tier fails to list
+if ! index_manifest_refs "$REMOTE_DAILY"; then
+  log "ERROR: Failed to index daily backups - aborting prune"
+  exit 1
+fi
+if ! index_manifest_refs "$REMOTE_MONTHLY"; then
+  log "ERROR: Failed to index monthly backups - aborting prune"
+  exit 1
+fi
 
 # Extract VMID from vzdump filename
 # Pattern: vzdump-(qemu|lxc)-{VMID}-{date}-{time}.{ext}.age
@@ -173,7 +186,15 @@ delete_excess_per_vmid() {
 
   # Process each VMID's files
   local total_deleted=0
-  for vmid in "${!vmid_files[@]}"; do
+for vmid in "${!vmid_files[@]}"; do
+    # Skip unknown VMID bucket - don't prune files we can't identify
+    if [[ "$vmid" == "unknown" ]]; then
+      local unknown_count
+      unknown_count=$(echo "${vmid_files[$vmid]}" | tr ',' '\n' | grep -c '^' || true)
+      log "  VM unknown: $unknown_count backup(s) with non-standard names - skipping (manual review recommended)"
+      continue
+    fi
+    
     # Sort by timestamp (newest first) and extract filenames
     local sorted_files
     sorted_files=$(echo "${vmid_files[$vmid]}" | tr ',' '\n' | sort -t'|' -k1 -r | cut -d'|' -f2)
@@ -197,7 +218,8 @@ delete_excess_per_vmid() {
       [[ -z "$file" ]] && continue
 
       local full_path="$remote_dir/$file"
-      local manifest_remaining=$(( ${manifest_refs["$file"]:-1} - 1 ))
+      # Default to 999 (keep manifest) if ref count unknown - fail-safe for unindexed files
+      local manifest_remaining=$(( ${manifest_refs["$file"]:-999} - 1 ))
 
       if [[ "$DRY_RUN" == "true" ]]; then
         log "    [DRY-RUN] Would delete: $file"
