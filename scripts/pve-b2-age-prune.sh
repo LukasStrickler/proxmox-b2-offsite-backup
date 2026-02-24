@@ -177,8 +177,9 @@ delete_excess_per_vmid() {
   fi
   
   # Get all .age files with their modification times
+  # Exclude manifest files (*.json.age) from retention pool - they're handled separately
   local all_files
-  if ! all_files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | "\(.ModTime)|\(.Name)"'); then
+  if ! all_files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | select(.Name | endswith(".json.age") | not) | "\(.ModTime)|\(.Name)"'); then
     log "  ERROR: Failed to parse file list from rclone output"
     return 1
   fi
@@ -285,13 +286,17 @@ delete_excess_global() {
   log "Processing: $remote_dir (keep=$keep_count $label total)"
   
   local files_json
-  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir" 2>&1); then
-    log "  ERROR: Failed to list $remote_dir: $files_json"
+  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir"); then
+    log "  ERROR: Failed to list $remote_dir"
     return 1
   fi
   
   local files
-  files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | "\(.ModTime)|\(.Name)"' | sort -t'|' -k1 -r | cut -d'|' -f2)
+  if ! files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | "\(.ModTime)|\(.Name)"'); then
+    log "  ERROR: Failed to parse file list from rclone output"
+    return 1
+  fi
+  files=$(echo "$files" | sort -t'|' -k1 -r | cut -d'|' -f2)
   
   if [[ -z "$files" ]]; then
     log "  No matching files found"
