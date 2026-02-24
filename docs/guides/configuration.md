@@ -19,8 +19,8 @@ Reference for all options in `config.env`. After installation, edit `/etc/pve-b2
 | `REMOTE_PREFIX` | No | `proxmox` | Subfolder in B2 bucket |
 | `HOST` | No | `hostname -s` | Hostname segment in remote path |
 | `ALLOW_CONCURRENT_STAGING` | No | `false` | Allow multiple backup files in DUMPDIR (see staging note) |
-| `KEEP_DAILY` | No | `7` | Number of daily backups per VM to keep |
-| `KEEP_MONTHLY` | No | `1` | Number of monthly backups per VM to keep |
+| `KEEP_DAILY` | No | `7` | Number of daily backups to keep **per VM** |
+| `KEEP_MONTHLY` | No | `1` | Number of monthly backups to keep **per VM** |
 | `KEEP_LOGS` | No | `30` | Number of log files to keep |
 | `KEEP_HOSTCONFIG` | No | `4` | Number of hostconfig backups to keep |
 | `RCAT_CUTOFF` | No | `8M` | Upload buffer size |
@@ -102,8 +102,8 @@ Allow more than one backup file in `DUMPDIR` at a time (default: `false`).
 Controls how many backups are kept on B2. Pruning runs daily via `pve-b2-age-prune.service`.
 
 ```bash
-KEEP_DAILY=7        # Keep 7 most recent daily backups
-KEEP_MONTHLY=1      # Keep 1 most recent monthly backup
+KEEP_DAILY=7        # Keep 7 most recent daily backups per VM
+KEEP_MONTHLY=1      # Keep 1 most recent monthly backup per VM
 KEEP_LOGS=30        # Keep 30 most recent log files
 ENABLE_MONTHLY=true # Create monthly copy on day 01
 ```

@@ -9,7 +9,6 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pve-b2-age-prune
 Restart=no
-RestartSec=5
 
 # Security hardening
 NoNewPrivileges=true

@@ -83,7 +83,7 @@ KEEP_HOSTCONFIG="${KEEP_HOSTCONFIG:-4}"
 for var_name in KEEP_DAILY KEEP_MONTHLY KEEP_LOGS KEEP_HOSTCONFIG; do
   value="${!var_name}"
   if [[ ! "$value" =~ ^[0-9]+$ ]]; then
-    log "ERROR: $var_name must be a positive integer >= 0, got: '${value}'"
+    log "ERROR: $var_name must be a non-negative integer, got: '${value}'"
     exit 1
   fi
   printf -v "$var_name" '%d' "$((10#$value))"
@@ -116,18 +116,25 @@ declare -A manifest_refs=()
 # Returns 0 on success, 1 on failure (fail-closed)
 index_manifest_refs() {
   local remote_dir="$1"
-  local files_json file name
+  local files_json name names
   
-  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir" 2>&1); then
-    log "ERROR: Failed to list $remote_dir: $files_json"
+  # Capture only stdout from rclone; let stderr go to logs
+  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir"); then
+    log "ERROR: Failed to list $remote_dir"
     return 1
   fi
   
+  # Parse JSON file list; fail if jq cannot parse (fail-closed)
+  if ! names=$(printf '%s\n' "$files_json" | jq -r '.[].Name'); then
+    log "ERROR: Failed to parse file list JSON for $remote_dir"
+    return 1
+  fi
+
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
     [[ "$name" == *.age ]] || continue
     manifest_refs["$name"]=$(( ${manifest_refs["$name"]:-0} + 1 ))
-  done < <(echo "$files_json" | jq -r '.[].Name' 2>/dev/null)
+  done <<< "$names"
   
   return 0
 }
