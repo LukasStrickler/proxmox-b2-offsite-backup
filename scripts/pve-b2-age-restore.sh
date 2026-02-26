@@ -114,9 +114,10 @@ RCLONE_CHECKERS="${RCLONE_CHECKERS:-8}"
 
 # Create isolated temp directory to prevent symlink attacks and concurrency collisions
 WORKDIR_BASE="${RESTORE_WORKDIR:-/var/lib/vz/dump}"
+# Ensure base directory exists before mktemp
+mkdir -p "$WORKDIR_BASE"
 WORKDIR=$(mktemp -d "${WORKDIR_BASE}/pve-restore-${NEW_ID}-XXXXXX")
 chmod 700 "$WORKDIR"
-
 # Initialize paths inside isolated temp directory
 manifest_enc="${WORKDIR}/manifest.json.age"
 manifest_plain="${WORKDIR}/manifest.json"

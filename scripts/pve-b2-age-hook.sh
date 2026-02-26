@@ -170,6 +170,9 @@ main() {
                 exit 1
             fi
             
+            # Ensure inflight marker is cleared on any unexpected exit (set -e failures)
+            trap clear_inflight EXIT
+            
             local base_filename
             base_filename=$(basename "$SRC")
             local daily_object="${REMOTE_DAILY}/${base_filename}.age"
@@ -184,7 +187,7 @@ main() {
             local manifest_temp
             manifest_temp=$(mktemp)
             # shellcheck disable=SC2064
-            trap "rm -f '$manifest_temp'" EXIT
+            trap 'clear_inflight; rm -f "$manifest_temp"' EXIT
             
             jq -n \
                 --arg vmid "$VMID" \
@@ -280,8 +283,8 @@ main() {
             ;;
             
         *)
-            log "ERROR: Unknown phase: $PHASE (may indicate Proxmox version incompatibility)"
-            exit 1
+            log "WARNING: Unknown phase: $PHASE (may indicate Proxmox version incompatibility)"
+            # Unknown phases are non-fatal - Proxmox may add new phases in future versions
             ;;
     esac
 }

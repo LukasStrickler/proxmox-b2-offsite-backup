@@ -82,20 +82,20 @@ KEEP_HOSTCONFIG="${KEEP_HOSTCONFIG:-4}"
 # Maximum allowed retention value to prevent overflow
 MAX_KEEP_VALUE=100000
 
-# Validate retention values: first check they are numeric and within bounds
+# Validate retention values: first coerce to base-10, then check bounds
 for var_name in KEEP_DAILY KEEP_MONTHLY KEEP_LOGS KEEP_HOSTCONFIG; do
   value="${!var_name}"
   if [[ ! "$value" =~ ^[0-9]+$ ]]; then
     log "ERROR: $var_name must be a non-negative integer, got: '${value}'"
     exit 1
   fi
-  # Check for overflow risk - values larger than this could cause arithmetic issues
-  if (( value > MAX_KEEP_VALUE )); then
-    log "ERROR: $var_name exceeds maximum allowed value ($MAX_KEEP_VALUE), got: ${value}"
+  # Coerce to base-10 FIRST to handle leading zeros (e.g., 09)
+  printf -v "$var_name" '%d' "$((10#$value))"
+  # Now check for overflow risk
+  if (( ${!var_name} > MAX_KEEP_VALUE )); then
+    log "ERROR: $var_name exceeds maximum allowed value ($MAX_KEEP_VALUE), got: ${!var_name}"
     exit 1
   fi
-  # Coerce to base-10
-  printf -v "$var_name" '%d' "$((10#$value))"
 done
 
 # Check dependencies
@@ -232,7 +232,7 @@ delete_excess_per_vmid() {
     # Sort by ModTime normalized to epoch (newest first), then extract filenames
     # Using jq to parse ISO8601 timestamps to epoch for correct chronological sorting
     local sorted_files
-    sorted_files=$(echo "${vmid_files[$vmid]}" | jq -rR 'split("\n") | map(split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | .[1]' 2>/dev/null) || {
+    sorted_files=$(echo "${vmid_files[$vmid]}" | jq -Rs 'split("\n") | map(split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 0) | .[1]' 2>/dev/null) || {
       # Fallback to lexical sort if jq parsing fails (e.g., non-standard timestamps)
       sorted_files=$(echo "${vmid_files[$vmid]}" | sort -t'|' -k1 -r | cut -d'|' -f2-)
     }
@@ -325,7 +325,7 @@ delete_excess_global() {
     return 1
   fi
   # Sort by ModTime normalized to epoch (newest first)
-  files=$(echo "$files" | jq -rR 'split("\n") | map(split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | .[1]' 2>/dev/null) || {
+  files=$(echo "$files" | jq -Rs 'split("\n") | map(split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 0) | .[1]' 2>/dev/null) || {
     files=$(echo "$files" | sort -t'|' -k1 -r | cut -d'|' -f2-)
   }
   

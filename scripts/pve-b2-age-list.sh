@@ -169,11 +169,11 @@ for current_tier in "${TIERS_TO_LIST[@]}"; do
             fi
             if [[ "$SHOW_DOWNLOAD" == "true" ]]; then
                 # Use printf %q to safely escape filenames for shell copy-paste
-                local escaped_name escaped_remote
                 escaped_name=$(printf '%q' "./${name}")
                 escaped_remote=$(printf '%q' "${REMOTE_DIR}/${name}")
                 echo "    Download: rclone copyto ${escaped_remote} ${escaped_name}"
                 echo ""
+            fi
         fi
     done < <(echo "$files_json" | jq -c '.[]')
     

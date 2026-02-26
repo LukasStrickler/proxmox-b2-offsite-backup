@@ -155,8 +155,6 @@ load_config() {
         echo "ERROR: Configuration file must have permissions 600 or 400, got: $config_perms" >&2
         return 1
     fi
-        echo "WARNING: Configuration file should have permissions 600, got: $config_perms" >&2
-    fi
     
     # shellcheck source=/dev/null
     source "$config_file"
