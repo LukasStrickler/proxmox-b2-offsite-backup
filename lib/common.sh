@@ -152,6 +152,9 @@ load_config() {
     fi
     
     if [[ "$config_perms" != "600" && "$config_perms" != "400" ]]; then
+        echo "ERROR: Configuration file must have permissions 600 or 400, got: $config_perms" >&2
+        return 1
+    fi
         echo "WARNING: Configuration file should have permissions 600, got: $config_perms" >&2
     fi
     

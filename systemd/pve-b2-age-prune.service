@@ -1,7 +1,8 @@
 [Unit]
 Description=PVE B2 Age Backup Prune
 Documentation=https://github.com/LukasStrickler/proxmox-b2-offsite-backup
-
+Wants=network-online.target
+After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/pve-b2-age-prune.sh
@@ -15,7 +16,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/log /run/lock
+ReadWritePaths=/var/log /run/pve-b2-age
 ReadOnlyPaths=/etc/pve-b2-age-backup
 
 # Additional hardening

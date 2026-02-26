@@ -79,13 +79,22 @@ KEEP_MONTHLY="${KEEP_MONTHLY:-1}"
 KEEP_LOGS="${KEEP_LOGS:-30}"
 KEEP_HOSTCONFIG="${KEEP_HOSTCONFIG:-4}"
 
-# Validate retention values: first check they are numeric, then coerce to base-10
+# Maximum allowed retention value to prevent overflow
+MAX_KEEP_VALUE=100000
+
+# Validate retention values: first check they are numeric and within bounds
 for var_name in KEEP_DAILY KEEP_MONTHLY KEEP_LOGS KEEP_HOSTCONFIG; do
   value="${!var_name}"
   if [[ ! "$value" =~ ^[0-9]+$ ]]; then
     log "ERROR: $var_name must be a non-negative integer, got: '${value}'"
     exit 1
   fi
+  # Check for overflow risk - values larger than this could cause arithmetic issues
+  if (( value > MAX_KEEP_VALUE )); then
+    log "ERROR: $var_name exceeds maximum allowed value ($MAX_KEEP_VALUE), got: ${value}"
+    exit 1
+  fi
+  # Coerce to base-10
   printf -v "$var_name" '%d' "$((10#$value))"
 done
 
@@ -99,15 +108,20 @@ LOCK_DIR="/run/pve-b2-age"
 mkdir -p "$LOCK_DIR"
 chmod 700 "$LOCK_DIR"
 
-# Acquire lock
+# Acquire lock - exit with distinct code if already running
+LOCK_EXIT_CODE=0  # Success by default
 exec 200>"${LOCK_DIR}/prune.lock"
 if ! flock -n 200; then
-  log "Prune already running, exiting"
-  exit 0
+  log "Prune already running, exiting (skipped)"
+  # Exit code 75 = EX_TEMPFAIL (temporary failure, can retry)
+  exit 75
 fi
 
 log "Starting prune (dry-run=$DRY_RUN)"
 log "Retention: daily=$KEEP_DAILY per VM, monthly=$KEEP_MONTHLY per VM, logs=$KEEP_LOGS, hostconfig=$KEEP_HOSTCONFIG"
+
+# Track errors for final exit code
+ERRORS_OCCURRED=0
 
 # Track manifest references across tiers to prevent premature deletion
 declare -A manifest_refs=()
@@ -118,8 +132,8 @@ index_manifest_refs() {
   local remote_dir="$1"
   local files_json name names
   
-  # Capture only stdout from rclone; let stderr go to logs
-  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir"); then
+  # Capture only stdout from rclone; let stderr go to logs separately
+  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir" 2>>"$LOG"); then
     log "ERROR: Failed to list $remote_dir"
     return 1
   fi
@@ -170,17 +184,20 @@ delete_excess_per_vmid() {
   log "Processing: $remote_dir (keep=$keep_count backups per VM)"
   
   # Get all files from remote using lsjson for ModTime sorting
+  # Capture stdout only; stderr goes to log separately to avoid JSON corruption
   local files_json
-  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir" 2>&1); then
-    log "  ERROR: Failed to list $remote_dir: $files_json"
+  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir" 2>>"$LOG"); then
+    log "  ERROR: Failed to list $remote_dir"
+    ((ERRORS_OCCURRED++))
     return 1
   fi
   
-  # Get all .age files with their modification times
+  # Get all .age files with their modification times, normalized to epoch for correct sorting
   # Exclude manifest files (*.json.age) from retention pool - they're handled separately
   local all_files
   if ! all_files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | select(.Name | endswith(".json.age") | not) | "\(.ModTime)|\(.Name)"'); then
     log "  ERROR: Failed to parse file list from rclone output"
+    ((ERRORS_OCCURRED++))
     return 1
   fi
   
@@ -190,13 +207,15 @@ delete_excess_per_vmid() {
   fi
   
   # Build associative array: vmid -> list of files with timestamps
+  # Use newline as delimiter instead of comma to handle filenames with special chars
   declare -A vmid_files
   local line file vmid modtime
   
   while IFS='|' read -r modtime file; do
     [[ -z "$file" ]] && continue
     vmid=$(extract_vmid "$file")
-    vmid_files["$vmid"]="${vmid_files["$vmid"]:-}${vmid_files["$vmid"]:+,}${modtime}|${file}"
+    # Use newline delimiter to avoid issues with commas in filenames
+    vmid_files["$vmid"]="${vmid_files["$vmid"]:-}${vmid_files["$vmid"]:+$'\n'}${modtime}|${file}"
   done <<< "$all_files"
   
   # Process each VMID's files
@@ -205,14 +224,18 @@ delete_excess_per_vmid() {
     # Skip unknown VMID bucket - don't prune files we can't identify
     if [[ "$vmid" == "unknown" ]]; then
       local unknown_count
-      unknown_count=$(echo "${vmid_files[$vmid]}" | tr ',' '\n' | grep -c '^' || true)
+      unknown_count=$(echo "${vmid_files[$vmid]}" | grep -c '^' || true)
       log "  VM unknown: $unknown_count backup(s) with non-standard names - skipping (manual review recommended)"
       continue
     fi
     
-    # Sort by ModTime (newest first) and extract filenames
+    # Sort by ModTime normalized to epoch (newest first), then extract filenames
+    # Using jq to parse ISO8601 timestamps to epoch for correct chronological sorting
     local sorted_files
-    sorted_files=$(echo "${vmid_files[$vmid]}" | tr ',' '\n' | sort -t'|' -k1 -r | cut -d'|' -f2)
+    sorted_files=$(echo "${vmid_files[$vmid]}" | jq -rR 'split("\n") | map(split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | .[1]' 2>/dev/null) || {
+      # Fallback to lexical sort if jq parsing fails (e.g., non-standard timestamps)
+      sorted_files=$(echo "${vmid_files[$vmid]}" | sort -t'|' -k1 -r | cut -d'|' -f2-)
+    }
     
     local vm_total
     vm_total=$(echo "$sorted_files" | grep -c '^' || true)
@@ -255,8 +278,9 @@ delete_excess_per_vmid() {
             local manifest_file="${manifest_dir}/${file%.age}.json.age"
             if (( manifest_remaining <= 0 )); then
               # Delete manifest from current tier
-              rclone deletefile --b2-hard-delete "$manifest_file" >>"$LOG" 2>&1 || \
+              if ! rclone deletefile --b2-hard-delete "$manifest_file" >>"$LOG" 2>&1; then
                 log "      WARNING: Failed to delete manifest (may not exist)"
+              fi
               # Also delete from central manifest directory if pruning monthly
               # This prevents orphaned manifests when same backup existed in both tiers
               if [[ "$manifest_dir" == "$REMOTE_MONTHLY" && -n "$REMOTE_MANIFEST" ]]; then
@@ -268,7 +292,8 @@ delete_excess_per_vmid() {
             fi
           fi
         else
-          log "      WARNING: Failed to delete $file"
+          log "      ERROR: Failed to delete $file"
+          ((ERRORS_OCCURRED++))
         fi
       fi
     done <<< "$files_to_delete"
@@ -286,17 +311,23 @@ delete_excess_global() {
   log "Processing: $remote_dir (keep=$keep_count $label total)"
   
   local files_json
-  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir"); then
+  # Capture stdout only; stderr goes to log separately
+  if ! files_json=$(rclone lsjson --files-only --fast-list "$remote_dir" 2>>"$LOG"); then
     log "  ERROR: Failed to list $remote_dir"
+    ((ERRORS_OCCURRED++))
     return 1
   fi
   
   local files
   if ! files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | "\(.ModTime)|\(.Name)"'); then
     log "  ERROR: Failed to parse file list from rclone output"
+    ((ERRORS_OCCURRED++))
     return 1
   fi
-  files=$(echo "$files" | sort -t'|' -k1 -r | cut -d'|' -f2)
+  # Sort by ModTime normalized to epoch (newest first)
+  files=$(echo "$files" | jq -rR 'split("\n") | map(split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | .[1]' 2>/dev/null) || {
+    files=$(echo "$files" | sort -t'|' -k1 -r | cut -d'|' -f2-)
+  }
   
   if [[ -z "$files" ]]; then
     log "  No matching files found"
@@ -325,8 +356,10 @@ delete_excess_global() {
       log "    [DRY-RUN] Would delete: $file"
     else
       log "    Deleting: $file"
-      rclone deletefile --b2-hard-delete "$full_path" >>"$LOG" 2>&1 || \
-        log "      WARNING: Failed to delete $file"
+      if ! rclone deletefile --b2-hard-delete "$full_path" >>"$LOG" 2>&1; then
+        log "      ERROR: Failed to delete $file"
+        ((ERRORS_OCCURRED++))
+      fi
     fi
   done <<< "$files_to_delete"
 }
@@ -344,10 +377,22 @@ delete_excess_global "$REMOTE_LOGS" "$KEEP_LOGS" "log files"
 delete_excess_global "$REMOTE_HOSTCONFIG" "$KEEP_HOSTCONFIG" "hostconfig backups"
 
 # Cleanup uncommitted/hidden files on B2
-if [[ "$DRY_RUN" == "false" ]]; then
+if [[ "$DRY_RUN" == "true" ]]; then
+  log "[DRY-RUN] Would run: rclone cleanup --b2-hard-delete $REMOTE_BASE"
+else
   log "Running rclone cleanup..."
-  rclone cleanup --b2-hard-delete "$(sanitize_path "$REMOTE_BASE")" >>"$LOG" 2>&1 || log "WARNING: Cleanup had issues"
+  if ! rclone cleanup --b2-hard-delete "$(sanitize_path "$REMOTE_BASE")" >>"$LOG" 2>&1; then
+    log "WARNING: Cleanup had issues"
+    ((ERRORS_OCCURRED++))
+  fi
 fi
 
 log "Prune completed"
+
+# Exit with error code if any deletions failed
+if (( ERRORS_OCCURRED > 0 )); then
+  log "WARNING: $ERRORS_OCCURRED error(s) occurred during prune"
+  exit 1
+fi
+
 exit 0

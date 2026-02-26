@@ -1,0 +1,11 @@
+/var/log/pve-b2-age.log
+/var/log/pve-b2-age-restore.log
+{
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+}

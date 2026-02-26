@@ -168,9 +168,12 @@ for current_tier in "${TIERS_TO_LIST[@]}"; do
                 printf "    Type: %-6s  VMID: %-6s  Date: %s\n" "$backup_type" "$vmid" "$formatted_date"
             fi
             if [[ "$SHOW_DOWNLOAD" == "true" ]]; then
-                echo "    Download: rclone copyto '${REMOTE_DIR}/${name}' './${name}'"
+                # Use printf %q to safely escape filenames for shell copy-paste
+                local escaped_name escaped_remote
+                escaped_name=$(printf '%q' "./${name}")
+                escaped_remote=$(printf '%q' "${REMOTE_DIR}/${name}")
+                echo "    Download: rclone copyto ${escaped_remote} ${escaped_name}"
                 echo ""
-            fi
         fi
     done < <(echo "$files_json" | jq -c '.[]')
     

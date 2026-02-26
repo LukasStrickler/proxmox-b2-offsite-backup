@@ -57,15 +57,45 @@ if ! flock -w 300 200; then
     exit 1
 fi
 
+# In-flight marker file for TOCTOU-safe staging check
+# This prevents race conditions where two jobs both pass the staging check
+# before either creates a dump file
+INFLIGHT_MARKER="${LOCK_DIR}/inflight"
+
 # At backup-start: ensure staging has no other backup file (only one backup at a time).
 # This protects limited staging (e.g. 100GB) when backing up many large VMs (e.g. 8x80GB).
 # Space is only freed after upload in backup-end; overlapping jobs would fill the disk.
 # Set ALLOW_CONCURRENT_STAGING=true in config to disable (only if staging is large enough).
 staging_busy() {
     [[ "${ALLOW_CONCURRENT_STAGING:-false}" == "true" ]] && return 1
+    
+    # First check: is there an in-flight marker from another job?
+    if [[ -f "$INFLIGHT_MARKER" ]]; then
+        local marker_vmid
+        marker_vmid=$(cat "$INFLIGHT_MARKER" 2>/dev/null || echo "unknown")
+        log "ERROR: Staging busy — backup job for VMID $marker_vmid is in progress"
+        return 0
+    fi
+    
+    # Second check: are there existing dump files?
     local count
     count=$(find "$DUMPDIR" -maxdepth 1 -type f \( -name 'vzdump-qemu-*' -o -name 'vzdump-lxc-*' \) 2>/dev/null | wc -l)
-    [[ "$count" -gt 0 ]]
+    if [[ "$count" -gt 0 ]]; then
+        log "ERROR: Staging busy — $count backup file(s) already in $DUMPDIR (upload in progress or leftover)"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Set in-flight marker (called at backup-start)
+set_inflight() {
+    echo "$VMID" > "$INFLIGHT_MARKER"
+}
+
+# Clear in-flight marker (called at backup-end or backup-abort)
+clear_inflight() {
+    rm -f "$INFLIGHT_MARKER" 2>/dev/null || true
 }
 
 upload_encrypted_stream() {
@@ -92,15 +122,15 @@ upload_encrypted_stream() {
     while true; do
         log "Upload attempt $attempt/$max_attempts: $filename"
         
+        # Use single retry layer (outer backoff) - rclone uses --retries 1 to avoid nested retries
+        # This prevents excessive blocking when network issues occur
         if age -R "$AGE_RECIPIENTS" "$src_file" 2>>"$LOG" | \
            rclone rcat \
                --fast-list \
                --streaming-upload-cutoff "${RCAT_CUTOFF:-8M}" \
                --transfers 4 \
                --checkers 8 \
-               --retries 5 \
-               --retries-sleep 10s \
-               --low-level-retries 15 \
+               --retries 1 \
                --timeout 5m \
                --contimeout 1m \
                "$sanitized_remote" >>"$LOG" 2>&1; then
@@ -123,9 +153,11 @@ main() {
     case "$PHASE" in
         backup-start)
             if staging_busy; then
-                log "ERROR: Staging busy — another backup file already in $DUMPDIR (upload in progress or leftover). Only one backup at a time; schedule jobs so the next starts after the previous has finished and space is freed."
+                log "ERROR: Only one backup at a time; schedule jobs so the next starts after the previous has finished and space is freed."
                 exit 1
             fi
+            # Set in-flight marker to prevent TOCTOU race
+            set_inflight
             log "Backup started for VM/CT $VMID"
             ;;
             
@@ -134,6 +166,7 @@ main() {
             SRC="${TARGET:-${TARFILE:-}}"
             if [[ -z "$SRC" || ! -f "$SRC" ]]; then
                 log "ERROR: TARGET/TARFILE missing or not a file: '${SRC:-<unset>}'"
+                clear_inflight
                 exit 1
             fi
             
@@ -171,14 +204,13 @@ main() {
                 log "Backup upload successful: $base_filename"
                 
                 # Upload manifest
-                local manifest_ok=false
                 if upload_encrypted_stream "$manifest_temp" "$manifest_object"; then
                     log "Manifest upload successful"
-                    manifest_ok=true
                 else
                     log "ERROR: Manifest upload failed"
                     log "WARNING: Keeping local plaintext: $SRC"
                     log "WARNING: Re-run backup or manually delete after verifying remote backup"
+                    clear_inflight
                     exit 1
                 fi
                 
@@ -199,8 +231,12 @@ main() {
                             log "Monthly manifest copy created"
                         else
                             log "ERROR: Monthly manifest copy failed, deleting inconsistent monthly backup copy"
-                            if ! rclone delete "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1; then
-                                log "WARN: Failed to delete inconsistent monthly backup copy: $monthly_object"
+                            # Use deletefile instead of delete for single-object removal (safer)
+                            if ! rclone deletefile --b2-hard-delete "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1; then
+                                log "ERROR: Failed to delete inconsistent monthly backup copy: $monthly_object"
+                                log "WARNING: Monthly backup is in inconsistent state - manual cleanup required"
+                                clear_inflight
+                                exit 1
                             fi
                         fi
                     else
@@ -208,9 +244,12 @@ main() {
                     fi
                 fi
                 
+                # Clear in-flight marker on success
+                clear_inflight
                 log "Backup completed successfully for VM/CT $VMID"
             else
                 log "ERROR: Upload failed, keeping local plaintext: $SRC"
+                clear_inflight
                 exit 1
             fi
             ;;
@@ -229,6 +268,7 @@ main() {
             
         backup-abort)
             log "Backup aborted for VM/CT $VMID"
+            clear_inflight
             if [[ -n "$VMID" && -n "${DUMPDIR:-}" ]]; then
                 shopt -s nullglob
                 for f in "$DUMPDIR"/vzdump-*"-$VMID-"*; do
@@ -240,7 +280,8 @@ main() {
             ;;
             
         *)
-            log "WARNING: Unknown phase: $PHASE (may indicate Proxmox version incompatibility)"
+            log "ERROR: Unknown phase: $PHASE (may indicate Proxmox version incompatibility)"
+            exit 1
             ;;
     esac
 }
