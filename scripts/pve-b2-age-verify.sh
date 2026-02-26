@@ -105,7 +105,15 @@ if ! rclone copyto --fast-list "${REMOTE_DIR}/${ENC_NAME}" "$local_enc"; then
 fi
 
 log "Downloading manifest..."
-if ! rclone copyto --fast-list "${REMOTE_MANIFEST}/${manifest_name}" "$manifest_enc"; then
+# P1: Use tier-aware manifest path like restore.sh
+# Monthly backups have manifests in the monthly directory
+# Daily backups have manifests in the manifest directory
+if [[ "$TIER" == "monthly" ]]; then
+    manifest_remote_path="${REMOTE_DIR}/${manifest_name}"
+else
+    manifest_remote_path="${REMOTE_MANIFEST}/${manifest_name}"
+fi
+if ! rclone copyto --fast-list "$manifest_remote_path" "$manifest_enc"; then
     log "ERROR: Failed to download manifest"
     exit 1
 fi

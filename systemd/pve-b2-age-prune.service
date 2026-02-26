@@ -2,14 +2,20 @@
 Description=PVE B2 Age Backup Prune
 Documentation=https://github.com/LukasStrickler/proxmox-b2-offsite-backup
 Wants=network-online.target
-After=network-online.target
+After=network-online.target local-fs.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/pve-b2-age-prune.sh
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pve-b2-age-prune
-Restart=no
+# Retry on transient failures (network, B2 API issues)
+Restart=on-failure
+RestartSec=15m
+StartLimitBurst=2
+StartLimitIntervalSec=2h
+# Timeout for long-running network operations
+TimeoutStartSec=2h
 
 # Security hardening
 NoNewPrivileges=true

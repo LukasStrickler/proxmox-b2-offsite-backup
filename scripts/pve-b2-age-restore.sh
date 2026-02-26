@@ -108,6 +108,17 @@ if [[ ! -f "$AGE_IDENTITY" ]]; then
     exit 1
 fi
 
+# P1: Enforce strict permissions on age identity (private key)
+if [[ -f "$AGE_IDENTITY" ]]; then
+    key_perms=$(stat -c '%a' "$AGE_IDENTITY" 2>/dev/null)
+    if [[ "$key_perms" != "600" ]]; then
+        log "WARNING: Age identity file has insecure permissions ($key_perms), fixing to 0600"
+        chmod 600 "$AGE_IDENTITY" || {
+            log "ERROR: Failed to set secure permissions on $AGE_IDENTITY"
+            exit 1
+        }
+    fi
+fi
 # Rclone concurrency settings (configurable via env)
 RCLONE_TRANSFERS="${RCLONE_TRANSFERS:-1}"
 RCLONE_CHECKERS="${RCLONE_CHECKERS:-8}"
@@ -339,21 +350,38 @@ if [[ "$local_plain" == *.vma* ]]; then
     log "Detected VM backup (vma format)"
     log "Restoring VM to ID $NEW_ID..."
     
+    # P1: Add rollback on restore failure
+    restore_exit=0
     if [[ -n "$STORAGE" ]]; then
-        qmrestore "$local_plain" "$NEW_ID" --storage "$STORAGE"
+        qmrestore "$local_plain" "$NEW_ID" --storage "$STORAGE" || restore_exit=$?
     else
-        qmrestore "$local_plain" "$NEW_ID"
+        qmrestore "$local_plain" "$NEW_ID" || restore_exit=$?
+    fi
+    
+    if [[ $restore_exit -ne 0 ]]; then
+        log "ERROR: VM restore failed (exit code: $restore_exit), rolling back partial VM creation..."
+        qm destroy "$NEW_ID" --purge 2>/dev/null || log "WARNING: Could not destroy partial VM $NEW_ID (may not exist)"
+        exit 1
     fi
     
 elif [[ "$local_plain" == *.tar* ]]; then
     log "Detected container backup (tar format)"
     log "Restoring CT to ID $NEW_ID..."
     
+    # P1: Add rollback on restore failure
+    restore_exit=0
     if [[ -n "$STORAGE" ]]; then
-        pct restore "$NEW_ID" "$local_plain" --storage "$STORAGE"
+        pct restore "$NEW_ID" "$local_plain" --storage "$STORAGE" || restore_exit=$?
     else
-        pct restore "$NEW_ID" "$local_plain"
+        pct restore "$NEW_ID" "$local_plain" || restore_exit=$?
     fi
+    
+    if [[ $restore_exit -ne 0 ]]; then
+        log "ERROR: CT restore failed (exit code: $restore_exit), rolling back partial CT creation..."
+        pct destroy "$NEW_ID" --purge 2>/dev/null || log "WARNING: Could not destroy partial CT $NEW_ID (may not exist)"
+        exit 1
+    fi
+    
 else
     log "ERROR: Unknown backup format: $local_plain"
     exit 1

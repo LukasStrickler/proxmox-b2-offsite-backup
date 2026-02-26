@@ -1,15 +1,24 @@
 [Unit]
 Description=PVE B2 Age Host Config Backup
 Documentation=https://github.com/LukasStrickler/proxmox-b2-offsite-backup
-Wants=network-online.target
-After=network-online.target
+# Wait for Proxmox cluster filesystem to be ready
+Wants=network-online.target pve-cluster.service
+After=network-online.target pve-cluster.service local-fs.target
+ConditionPathIsMountPoint=/etc/pve
+
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/pve-b2-age-hostconfig.sh
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pve-b2-age-hostconfig
-Restart=no
+# Retry on transient failures (network, B2 API issues)
+Restart=on-failure
+RestartSec=5m
+StartLimitBurst=3
+StartLimitIntervalSec=30m
+# Timeout for long-running network operations
+TimeoutStartSec=2h
 
 # Security hardening
 NoNewPrivileges=true

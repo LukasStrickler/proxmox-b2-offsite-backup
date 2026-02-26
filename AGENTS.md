@@ -274,6 +274,110 @@ Before modifying any code, verify:
 
 ---
 
+---
+
+## Design Decisions (v0.2.0)
+
+This section documents key design decisions made during the security and reliability review.
+
+### Security Decisions
+
+#### Path Traversal Prevention (hook.sh)
+**Decision**: Validate that TARGET/TARFILE is under DUMPDIR using `realpath -m` comparison.
+
+**Rationale**: Proxmox passes TARGET/TARFILE as environment variables. Without validation, a compromised or misconfigured Proxmox could pass arbitrary file paths, potentially causing the hook to delete critical files after upload.
+
+**Implementation**: Compare resolved paths using `[[ "$src_realpath" != "$dumpdir_realpath"/* ]]` pattern matching.
+
+#### VMID Validation Before Cleanup (hook.sh)
+**Decision**: Only delete files matching `vzdump-*-$VMID-*` pattern if VMID is numeric.
+
+**Rationale**: In backup-abort phase, the cleanup loop uses VMID in the glob pattern. Non-numeric VMIDs could match unintended files or indicate a malformed call.
+
+**Implementation**: `if [[ -n "$VMID" && "$VMID" =~ ^[0-9]+$ && -n "${DUMPDIR:-}" ]]`
+
+#### Key File Permission Enforcement (restore.sh)
+**Decision**: Automatically fix insecure permissions (not 0600) on age identity file.
+
+**Rationale**: Private key files with loose permissions expose the key to other users on the system. The restore script needs the private key, so it's the right place to enforce this.
+
+**Implementation**: `chmod 600 "$AGE_IDENTITY"` with warning if permissions were wrong.
+
+### Reliability Decisions
+
+#### Inflight Marker with Stale Detection (hook.sh)
+**Decision**: Marker format changed from `VMID` to `VMID:PID:TIMESTAMP`.
+
+**Rationale**: Original format couldn't distinguish between a running backup and a stale marker from a crashed process. The new format allows:
+1. PID check: If process is alive, backup is definitely in progress
+2. Timestamp check: If process is dead AND marker is >6h old, it's stale and safe to remove
+
+**Implementation**: `echo "${VMID}:$$:$(date +%s)" > "$INFLIGHT_MARKER"`
+
+**Stale timeout**: 6 hours (21600 seconds) - longer than any reasonable backup.
+
+#### Signal Trap in backup-start (hook.sh)
+**Decision**: Add `trap 'clear_inflight; exit 130' INT TERM` in backup-start phase.
+
+**Rationale**: If vzdump is killed (SIGTERM/SIGINT) during backup, the inflight marker must be cleared to prevent future backups from being blocked.
+
+#### Partial Guest Rollback (restore.sh)
+**Decision**: If qmrestore or pct restore fails, destroy the partially created VM/CT.
+
+**Rationale**: Failed restores can leave partially created VMs/CTs that:
+1. Consume the target VMID
+2. May be in an inconsistent state
+3. Confuse users about whether restore succeeded
+
+**Implementation**: Capture exit code, call `qm destroy` or `pct destroy` on failure.
+
+#### Monthly Manifest Path (verify.sh)
+**Decision**: Use tier-aware manifest path like restore.sh.
+
+**Rationale**: Monthly backups store their manifests in the monthly directory, not the central manifest directory. The verify script was using the wrong path for monthly tier.
+
+**Implementation**: `if [[ "$TIER" == "monthly" ]]; then manifest_remote_path="${REMOTE_DIR}/${manifest_name}"`
+
+### Systemd Decisions
+
+#### Service Dependencies (hostconfig.service)
+**Decision**: Add `Wants=pve-cluster.service`, `After=pve-cluster.service`, `ConditionPathIsMountPoint=/etc/pve`.
+
+**Rationale**: The hostconfig backup reads `/etc/pve` which is served by pve-cluster. Without these dependencies, the service could start before the cluster filesystem is ready.
+
+#### Retry Logic (prune.service, hostconfig.service)
+**Decision**: Add `Restart=on-failure` with `RestartSec` and `StartLimitBurst`.
+
+**Rationale**: Network operations to B2 can fail transiently. Automatic retries reduce manual intervention for temporary issues.
+
+**Configuration**: 
+- prune.service: 2 retries in 2h window
+- hostconfig.service: 3 retries in 30m window
+
+#### Timer Jitter (prune.timer, hostconfig.timer)
+**Decision**: Add `RandomizedDelaySec` to both timers.
+
+**Rationale**: Prevents synchronized runs across multiple Proxmox hosts that could overwhelm B2 API or network.
+
+**Configuration**:
+- prune.timer: 10m jitter
+- hostconfig.timer: 20m jitter
+
+### Check Script Decisions
+
+#### Timer Existence Check (check.sh)
+**Decision**: Use `systemctl list-unit-files | grep -q "^${timer}\s"` instead of `systemctl list-unit-files "$timer"`.
+
+**Rationale**: The original command returns success even when the timer doesn't exist. The grep approach correctly identifies missing timers.
+
+#### Missing Dependencies (check.sh)
+**Decision**: Add `tar` and `zstd` to dependency check.
+
+**Rationale**: These are required by vzdump for backup creation and are listed in README requirements but weren't checked.
+
+---
+
+
 ## Contact and Support
 
 - **Issues**: https://github.com/LukasStrickler/proxmox-b2-offsite-backup/issues

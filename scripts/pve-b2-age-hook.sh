@@ -60,7 +60,11 @@ fi
 # In-flight marker file for TOCTOU-safe staging check
 # This prevents race conditions where two jobs both pass the staging check
 # before either creates a dump file
+# P2: Marker format: VMID:PID:TIMESTAMP for stale detection
 INFLIGHT_MARKER="${LOCK_DIR}/inflight"
+
+# P2: Stale marker timeout (6 hours - longer than any reasonable backup)
+STALE_MARKER_SECS=21600
 
 # At backup-start: ensure staging has no other backup file (only one backup at a time).
 # This protects limited staging (e.g. 100GB) when backing up many large VMs (e.g. 8x80GB).
@@ -71,10 +75,41 @@ staging_busy() {
     
     # First check: is there an in-flight marker from another job?
     if [[ -f "$INFLIGHT_MARKER" ]]; then
-        local marker_vmid
-        marker_vmid=$(cat "$INFLIGHT_MARKER" 2>/dev/null || echo "unknown")
-        log "ERROR: Staging busy — backup job for VMID $marker_vmid is in progress"
-        return 0
+        # P2: Parse marker for PID and timestamp to detect stale markers
+        local marker_content marker_vmid marker_pid marker_ts
+        marker_content=$(cat "$INFLIGHT_MARKER" 2>/dev/null || echo "unknown")
+        
+        # Check for new format (VMID:PID:TIMESTAMP) vs old format (just VMID)
+        if [[ "$marker_content" =~ ^([0-9]+):([0-9]+):([0-9]+)$ ]]; then
+            marker_vmid="${BASH_REMATCH[1]}"
+            marker_pid="${BASH_REMATCH[2]}"
+            marker_ts="${BASH_REMATCH[3]}"
+            
+            # Check if process is still running
+            if ! kill -0 "$marker_pid" 2>/dev/null; then
+                # Process died, check if marker is old enough to be stale
+                local now age
+                now=$(date +%s)
+                age=$((now - marker_ts))
+                if (( age > STALE_MARKER_SECS )); then
+                    log "WARNING: Removing stale inflight marker (PID $marker_pid dead, age ${age}s)"
+                    rm -f "$INFLIGHT_MARKER" 2>/dev/null || true
+                    # Continue to next check
+                else
+                    log "ERROR: Staging busy — backup job for VMID $marker_vmid has dead PID $marker_pid but marker is recent (${age}s old)"
+                    log "  Hint: If this is wrong, manually remove: $INFLIGHT_MARKER"
+                    return 0
+                fi
+            else
+                log "ERROR: Staging busy — backup job for VMID $marker_vmid is in progress (PID $marker_pid)"
+                return 0
+            fi
+        else
+            # Old format marker - just VMID, no PID/timestamp
+            log "ERROR: Staging busy — backup job for VMID $marker_content is in progress (legacy marker)"
+            log "  Hint: If stale, manually remove: $INFLIGHT_MARKER"
+            return 0
+        fi
     fi
     
     # Second check: are there existing dump files?
@@ -89,8 +124,9 @@ staging_busy() {
 }
 
 # Set in-flight marker (called at backup-start)
+# P2: Include PID and timestamp for stale detection
 set_inflight() {
-    echo "$VMID" > "$INFLIGHT_MARKER"
+    echo "${VMID}:$$:$(date +%s)" > "$INFLIGHT_MARKER"
 }
 
 # Clear in-flight marker (called at backup-end or backup-abort)
@@ -158,6 +194,8 @@ main() {
             fi
             # Set in-flight marker to prevent TOCTOU race
             set_inflight
+            # P1: Clear inflight on signal interruption (SIGTERM/SIGINT)
+            trap 'clear_inflight; exit 130' INT TERM
             log "Backup started for VM/CT $VMID"
             ;;
             
@@ -166,6 +204,24 @@ main() {
             SRC="${TARGET:-${TARFILE:-}}"
             if [[ -z "$SRC" || ! -f "$SRC" ]]; then
                 log "ERROR: TARGET/TARFILE missing or not a file: '${SRC:-<unset>}'"
+                clear_inflight
+                exit 1
+            fi
+            
+            # P1: Validate source file is under DUMPDIR (prevent path traversal)
+            local src_realpath dumpdir_realpath
+            if ! src_realpath=$(realpath -m "$SRC" 2>/dev/null); then
+                log "ERROR: Cannot resolve source file path: $SRC"
+                clear_inflight
+                exit 1
+            fi
+            if ! dumpdir_realpath=$(realpath -m "$DUMPDIR" 2>/dev/null); then
+                log "ERROR: Cannot resolve DUMPDIR path: $DUMPDIR"
+                clear_inflight
+                exit 1
+            fi
+            if [[ "$src_realpath" != "$dumpdir_realpath"/* ]]; then
+                log "ERROR: Source file must be under DUMPDIR: $SRC"
                 clear_inflight
                 exit 1
             fi
@@ -272,13 +328,16 @@ main() {
         backup-abort)
             log "Backup aborted for VM/CT $VMID"
             clear_inflight
-            if [[ -n "$VMID" && -n "${DUMPDIR:-}" ]]; then
+            # P2: Validate VMID is numeric before cleanup to prevent accidental deletion
+            if [[ -n "$VMID" && "$VMID" =~ ^[0-9]+$ && -n "${DUMPDIR:-}" ]]; then
                 shopt -s nullglob
                 for f in "$DUMPDIR"/vzdump-*"-$VMID-"*; do
                     log "Cleaning up aborted staging file: $f"
                     rm -f "$f" 2>/dev/null || true
                 done
                 shopt -u nullglob
+            elif [[ -n "$VMID" && ! "$VMID" =~ ^[0-9]+$ ]]; then
+                log "WARNING: VMID not numeric, skipping cleanup: $VMID"
             fi
             ;;
             
