@@ -131,7 +131,7 @@ check_dependencies() {
     info "Checking dependencies..."
     
     local missing=()
-    local deps=("rclone" "age" "jq" "curl" "zstd")
+    local deps=("rclone" "age" "jq" "curl" "zstd" "tar")
 
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" >/dev/null 2>&1; then
@@ -290,6 +290,8 @@ install_systemd() {
     
     systemctl daemon-reload
     log "Systemd daemon reloaded"
+}
+
 # Install logrotate config
 install_logrotate() {
     info "Installing logrotate config..."
@@ -301,7 +303,6 @@ install_logrotate() {
         install_to_path 644 "$src" "$dst"
         log "  Installed: /etc/logrotate.d/pve-b2-age"
     fi
-}
 }
 
 # Setup configuration directory
