@@ -243,7 +243,8 @@ check_systemd_timers() {
     for timer in "${timers[@]}"; do
         # P2: Use list-unit-files with grep for reliable existence check
         # list-unit-files "$timer" returns success even if timer doesn't exist
-        if systemctl list-unit-files 2>/dev/null | grep -q "^${timer}\\s"; then
+        # Use [[:space:]] for POSIX compatibility (not \s which requires -E)
+        if systemctl list-unit-files 2>/dev/null | grep -q "^${timer}[[:space:]]"; then
             if systemctl is-enabled "$timer" >/dev/null 2>&1; then
                 pass "$timer is enabled"
             else

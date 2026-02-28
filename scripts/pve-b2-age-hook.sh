@@ -85,12 +85,14 @@ staging_busy() {
             marker_pid="${BASH_REMATCH[2]}"
             marker_ts="${BASH_REMATCH[3]}"
             
+            # Calculate marker age first (needed for both cases)
+            local now age
+            now=$(date +%s)
+            age=$((now - marker_ts))
+            
             # Check if process is still running
             if ! kill -0 "$marker_pid" 2>/dev/null; then
                 # Process died, check if marker is old enough to be stale
-                local now age
-                now=$(date +%s)
-                age=$((now - marker_ts))
                 if (( age > STALE_MARKER_SECS )); then
                     log "WARNING: Removing stale inflight marker (PID $marker_pid dead, age ${age}s)"
                     rm -f "$INFLIGHT_MARKER" 2>/dev/null || true
@@ -101,8 +103,16 @@ staging_busy() {
                     return 0
                 fi
             else
-                log "ERROR: Staging busy — backup job for VMID $marker_vmid is in progress (PID $marker_pid)"
-                return 0
+                # PID is alive, but also check age to handle PID reuse
+                # A very old marker with a live PID could indicate PID was reused
+                if (( age > STALE_MARKER_SECS )); then
+                    log "WARNING: Live PID $marker_pid but marker is very old (${age}s), possible PID reuse - removing stale marker"
+                    rm -f "$INFLIGHT_MARKER" 2>/dev/null || true
+                    # Continue to next check
+                else
+                    log "ERROR: Staging busy — backup job for VMID $marker_vmid is in progress (PID $marker_pid, age ${age}s)"
+                    return 0
+                fi
             fi
         else
             # Old format marker - just VMID, no PID/timestamp
