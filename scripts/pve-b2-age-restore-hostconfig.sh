@@ -83,6 +83,12 @@ if [[ ! -f "$AGE_IDENTITY" ]]; then
     exit 1
 fi
 
+validate_path_safe "$WORKDIR" "WORKDIR" || exit 1
+if [[ "$WORKDIR" == "/" ]]; then
+    echo "ERROR: WORKDIR must not be '/'" >&2
+    exit 1
+fi
+
 mkdir -p "$WORKDIR"
 umask 077
 restore_dir=$(mktemp -d "${WORKDIR}/pve-hostcfg-restore-XXXXXX")
