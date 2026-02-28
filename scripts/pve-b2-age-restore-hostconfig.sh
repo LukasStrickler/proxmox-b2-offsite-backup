@@ -53,6 +53,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ -n "$HOST_FILTER" ]]; then
+    if [[ "$HOST_FILTER" == *"/"* || "$HOST_FILTER" == *".."* || ! "$HOST_FILTER" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo "ERROR: Invalid --host value: $HOST_FILTER" >&2
+        echo "  Host must match [A-Za-z0-9._-] and must not contain '/' or '..'" >&2
+        exit 1
+    fi
+fi
+
 load_config || exit 1
 validate_config "RCLONE_REMOTE" "AGE_IDENTITY" || exit 1
 

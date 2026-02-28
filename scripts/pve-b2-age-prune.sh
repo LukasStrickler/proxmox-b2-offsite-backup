@@ -146,6 +146,11 @@ index_manifest_refs() {
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
     [[ "$name" == *.age ]] || continue
+    if [[ "$name" == */* || "$name" == *".."* ]]; then
+      log "WARNING: Skipping unsafe object name while indexing manifests: $name"
+      ((ERRORS_OCCURRED++))
+      continue
+    fi
     manifest_refs["$name"]=$(( ${manifest_refs["$name"]:-0} + 1 ))
   done <<< "$names"
   
@@ -194,7 +199,7 @@ delete_excess_per_vmid() {
   # Get all .age files with their modification times, normalized to epoch for correct sorting
   # Exclude manifest files (*.json.age) from retention pool - they're handled separately
   local all_files
-  if ! all_files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | select(.Name | endswith(".json.age") | not) | [.ModTime, .Name] | @tsv'); then
+  if ! all_files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | select(.Name | endswith(".json.age") | not) | select(.Name | contains("/") | not) | select(.Name | contains("..") | not) | [.ModTime, .Name] | @tsv'); then
     log "  ERROR: Failed to parse file list from rclone output"
     ((ERRORS_OCCURRED++))
     return 1
@@ -211,6 +216,11 @@ delete_excess_per_vmid() {
   
   while IFS=$'\t' read -r modtime file; do
     [[ -z "$file" ]] && continue
+    if [[ "$file" == */* || "$file" == *".."* ]]; then
+      log "  WARNING: Skipping unsafe backup object name: $file"
+      ((ERRORS_OCCURRED++))
+      continue
+    fi
     vmid=$(extract_vmid "$file")
     vmid_files["$vmid"]="${vmid_files["$vmid"]:-}${vmid_files["$vmid"]:+$'\n'}${modtime}"$'\t'"${file}"
   done <<< "$all_files"
@@ -251,6 +261,11 @@ delete_excess_per_vmid() {
     
     while IFS= read -r file; do
       [[ -z "$file" ]] && continue
+      if [[ "$file" == */* || "$file" == *".."* ]]; then
+        log "    ERROR: Refusing to delete unsafe object name: $file"
+        ((ERRORS_OCCURRED++))
+        continue
+      fi
       
       local full_path="$remote_dir/$file"
       # Default to 999 (keep manifest) if ref count unknown - fail-safe for unindexed files
@@ -316,7 +331,7 @@ delete_excess_global() {
   fi
   
   local files
-  if ! files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | [.ModTime, .Name] | @tsv'); then
+  if ! files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | select(.Name | contains("/") | not) | select(.Name | contains("..") | not) | [.ModTime, .Name] | @tsv'); then
     log "  ERROR: Failed to parse file list from rclone output"
     ((ERRORS_OCCURRED++))
     return 1
@@ -347,6 +362,11 @@ delete_excess_global() {
   
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
+    if [[ "$file" == */* || "$file" == *".."* ]]; then
+      log "    ERROR: Refusing to delete unsafe object name: $file"
+      ((ERRORS_OCCURRED++))
+      continue
+    fi
     local full_path="$remote_dir/$file"
     
     if [[ "$DRY_RUN" == "true" ]]; then
