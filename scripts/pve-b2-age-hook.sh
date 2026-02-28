@@ -43,6 +43,7 @@ need rclone
 need flock
 need sha256sum
 need jq
+need realpath
 
 # Create dedicated lock directory (root-only)
 LOCK_DIR="/run/pve-b2-age"
@@ -60,10 +61,10 @@ fi
 # In-flight marker file for TOCTOU-safe staging check
 # This prevents race conditions where two jobs both pass the staging check
 # before either creates a dump file
-# P2: Marker format: VMID:PID:TIMESTAMP for stale detection
+# Marker format: VMID:PID:TIMESTAMP for stale detection
 INFLIGHT_MARKER="${LOCK_DIR}/inflight"
 
-# P2: Stale marker timeout (6 hours - longer than any reasonable backup)
+# Stale marker timeout (6 hours - longer than any reasonable backup)
 STALE_MARKER_SECS=21600
 
 # At backup-start: ensure staging has no other backup file (only one backup at a time).
@@ -75,7 +76,7 @@ staging_busy() {
     
     # First check: is there an in-flight marker from another job?
     if [[ -f "$INFLIGHT_MARKER" ]]; then
-        # P2: Parse marker for PID and timestamp to detect stale markers
+        # Parse marker for PID and timestamp to detect stale markers
         local marker_content marker_vmid marker_pid marker_ts
         marker_content=$(cat "$INFLIGHT_MARKER" 2>/dev/null || echo "unknown")
         
@@ -134,7 +135,7 @@ staging_busy() {
 }
 
 # Set in-flight marker (called at backup-start)
-# P2: Include PID and timestamp for stale detection
+# Include PID and timestamp for stale detection
 set_inflight() {
     echo "${VMID}:$$:$(date +%s)" > "$INFLIGHT_MARKER"
 }
@@ -202,10 +203,10 @@ main() {
                 log "ERROR: Only one backup at a time; schedule jobs so the next starts after the previous has finished and space is freed."
                 exit 1
             fi
+            # Clear in-flight marker on signal interruption (SIGTERM/SIGINT)
+            trap 'clear_inflight; exit 130' INT TERM
             # Set in-flight marker to prevent TOCTOU race
             set_inflight
-            # P1: Clear inflight on signal interruption (SIGTERM/SIGINT)
-            trap 'clear_inflight; exit 130' INT TERM
             log "Backup started for VM/CT $VMID"
             ;;
             
@@ -218,7 +219,7 @@ main() {
                 exit 1
             fi
             
-            # P1: Validate source file is under DUMPDIR (prevent path traversal)
+            # Validate source file is under DUMPDIR (prevent path traversal)
             local src_realpath dumpdir_realpath
             if ! src_realpath=$(realpath -m "$SRC" 2>/dev/null); then
                 log "ERROR: Cannot resolve source file path: $SRC"
@@ -236,7 +237,7 @@ main() {
                 exit 1
             fi
             
-            # Ensure inflight marker is cleared on any unexpected exit (set -e failures)
+            # Ensure in-flight marker is cleared on any unexpected exit (set -e failures)
             trap clear_inflight EXIT
             
             local base_filename
@@ -327,18 +328,37 @@ main() {
             # LOGFILE exists only at log-end
             LF="${LOGFILE:-}"
             if [[ -n "$LF" && -f "$LF" ]]; then
-                local log_basename
-                log_basename=$(basename "$LF")
-                local log_object="${REMOTE_LOGS}/${log_basename}.age"
-                log "Uploading vzdump log: $log_basename"
-                upload_encrypted_stream "$LF" "$log_object" || log "WARN: Log upload failed"
+                local lf_realpath varlog_realpath dumpdir_realpath
+                local upload_logfile=true
+                if ! lf_realpath=$(realpath -m "$LF" 2>/dev/null); then
+                    log "WARN: Could not resolve LOGFILE path, skipping upload: $LF"
+                    upload_logfile=false
+                fi
+                if ! varlog_realpath=$(realpath -m "/var/log" 2>/dev/null); then
+                    varlog_realpath="/var/log"
+                fi
+                if ! dumpdir_realpath=$(realpath -m "$DUMPDIR" 2>/dev/null); then
+                    dumpdir_realpath=""
+                fi
+                if [[ "$upload_logfile" == "true" && "$lf_realpath" != "$varlog_realpath"/* && ( -z "$dumpdir_realpath" || "$lf_realpath" != "$dumpdir_realpath"/* ) ]]; then
+                    log "WARN: Skipping log upload for disallowed LOGFILE path: $LF"
+                    upload_logfile=false
+                fi
+
+                if [[ "$upload_logfile" == "true" ]]; then
+                    local log_basename
+                    log_basename=$(basename "$LF")
+                    local log_object="${REMOTE_LOGS}/${log_basename}.age"
+                    log "Uploading vzdump log: $log_basename"
+                    upload_encrypted_stream "$LF" "$log_object" || log "WARN: Log upload failed"
+                fi
             fi
             ;;
             
         backup-abort)
             log "Backup aborted for VM/CT $VMID"
             clear_inflight
-            # P2: Validate VMID is numeric before cleanup to prevent accidental deletion
+            # Validate VMID is numeric before cleanup to prevent accidental deletion
             if [[ -n "$VMID" && "$VMID" =~ ^[0-9]+$ && -n "${DUMPDIR:-}" ]]; then
                 shopt -s nullglob
                 for f in "$DUMPDIR"/vzdump-*"-$VMID-"*; do

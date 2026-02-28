@@ -60,7 +60,7 @@ check_dependencies() {
     echo ""
     echo "=== Dependencies ==="
     
-    local deps=("rclone" "age" "jq" "flock" "sha256sum" "tar" "zstd")
+    local deps=("rclone" "age" "jq" "flock" "sha256sum" "tar" "zstd" "realpath")
     
     for dep in "${deps[@]}"; do
         if command -v "$dep" >/dev/null 2>&1; then
@@ -241,7 +241,7 @@ check_systemd_timers() {
     local timers=("pve-b2-age-prune.timer" "pve-b2-age-hostconfig.timer")
     
     for timer in "${timers[@]}"; do
-        # P2: Use list-unit-files with grep for reliable existence check
+        # Use list-unit-files with grep for reliable existence check
         # list-unit-files "$timer" returns success even if timer doesn't exist
         # Use [[:space:]] for POSIX compatibility (not \s which requires -E)
         if systemctl list-unit-files 2>/dev/null | grep -q "^${timer}[[:space:]]"; then
