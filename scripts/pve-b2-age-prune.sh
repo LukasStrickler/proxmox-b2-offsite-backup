@@ -232,7 +232,7 @@ delete_excess_per_vmid() {
     # Sort by ModTime normalized to epoch (newest first), then extract filenames
     # Using jq to parse ISO8601 timestamps to epoch for correct chronological sorting
     local sorted_files
-    sorted_files=$(echo "${vmid_files[$vmid]}" | jq -Rs 'split("\n") | map(split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 0) | .[1]' 2>/dev/null) || {
+    sorted_files=$(echo "${vmid_files[$vmid]}" | jq -Rs 'split("\n") | map(select(length > 0) | split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 1) | .[1]' 2>/dev/null) || {
       # Fallback to lexical sort if jq parsing fails (e.g., non-standard timestamps)
       sorted_files=$(echo "${vmid_files[$vmid]}" | sort -t'|' -k1 -r | cut -d'|' -f2-)
     }
@@ -325,7 +325,7 @@ delete_excess_global() {
     return 1
   fi
   # Sort by ModTime normalized to epoch (newest first)
-  files=$(echo "$files" | jq -Rs 'split("\n") | map(split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 0) | .[1]' 2>/dev/null) || {
+  files=$(echo "$files" | jq -Rs 'split("\n") | map(select(length > 0) | split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 1) | .[1]' 2>/dev/null) || {
     files=$(echo "$files" | sort -t'|' -k1 -r | cut -d'|' -f2-)
   }
   
