@@ -54,7 +54,7 @@ HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
 REMOTE_DIR="${REMOTE_BASE}/${TIER}"
 REMOTE_MANIFEST="${REMOTE_BASE}/manifest"
-# Parent directory for temp files (a unique subdir will be created via mktemp)
+# Parent directory for temp files; a unique subdir is created via mktemp
 WORKDIR="${VERIFY_WORKDIR:-/var/tmp}"
 LOG="${LOG:-/var/log/pve-b2-age-verify.log}"
 
@@ -82,12 +82,13 @@ manifest_name="${ENC_NAME%.age}.json.age"
 manifest_enc="${tmpdir}/${manifest_name}"
 manifest_plain="${tmpdir}/${manifest_name%.age}"
 
+# shellcheck disable=SC2329
 cleanup() {
-    [[ -f "$manifest_enc" ]] && rm -f "$manifest_enc"
-    [[ -f "$manifest_plain" ]] && rm -f "$manifest_plain"
-    [[ -f "$local_enc" ]] && rm -f "$local_enc"
+    [[ -f "$manifest_enc" ]] && rm -f "$manifest_enc" || true
+    [[ -f "$manifest_plain" ]] && rm -f "$manifest_plain" || true
+    [[ -f "$local_enc" ]] && rm -f "$local_enc" || true
     if [[ "$DELETE_AFTER" == "true" && -f "$local_plain" ]]; then
-        rm -f "$local_plain"
+        rm -f "$local_plain" || true
         log "Decrypted file deleted"
     fi
     rmdir "$tmpdir" 2>/dev/null || true
@@ -105,7 +106,7 @@ if ! rclone copyto --fast-list "${REMOTE_DIR}/${ENC_NAME}" "$local_enc"; then
 fi
 
 log "Downloading manifest..."
-# P1: Use tier-aware manifest path like restore.sh
+# Use tier-aware manifest path (same logic as restore.sh)
 # Monthly backups have manifests in the monthly directory
 # Daily backups have manifests in the manifest directory
 if [[ "$TIER" == "monthly" ]]; then
@@ -124,8 +125,22 @@ if ! age -d -i "$AGE_IDENTITY" -o "$manifest_plain" "$manifest_enc"; then
     exit 1
 fi
 
-expected_sha=$(jq -r '.sha256' "$manifest_plain")
-expected_size=$(jq -r '.size_bytes' "$manifest_plain")
+if ! expected_sha=$(jq -r '.sha256' "$manifest_plain" 2>/dev/null); then
+    log "ERROR: Failed to parse manifest JSON - sha256 field missing or invalid"
+    exit 1
+fi
+if ! expected_size=$(jq -r '.size_bytes' "$manifest_plain" 2>/dev/null); then
+    log "ERROR: Failed to parse manifest JSON - size_bytes field missing or invalid"
+    exit 1
+fi
+if [[ "$expected_size" == "null" || ! "$expected_size" =~ ^[0-9]+$ ]]; then
+    log "ERROR: Invalid manifest - size_bytes is missing or not numeric"
+    exit 1
+fi
+if [[ "$expected_sha" == "null" || ${#expected_sha} -ne 64 || ! "$expected_sha" =~ ^[0-9a-fA-F]+$ ]]; then
+    log "ERROR: Invalid manifest - sha256 is missing or malformed"
+    exit 1
+fi
 
 log "Expected size: $expected_size bytes"
 log "Expected SHA256: ${expected_sha:0:16}..."

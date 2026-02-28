@@ -88,6 +88,10 @@ if (( 10#$NEW_ID < 100 || 10#$NEW_ID > 999999999 )); then
     log "ERROR: NEW_ID must be between 100 and 999999999, got: $NEW_ID"
     exit 1
 fi
+if [[ -n "$STORAGE" && ! "$STORAGE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    log "ERROR: STORAGE contains invalid characters: $STORAGE"
+    exit 1
+fi
 
 HOST="${HOST:-$(hostname -s)}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${HOST}"
@@ -108,7 +112,7 @@ if [[ ! -f "$AGE_IDENTITY" ]]; then
     exit 1
 fi
 
-# P1: Enforce strict permissions on age identity (private key)
+# Enforce strict permissions on age identity (private key)
 if [[ -f "$AGE_IDENTITY" ]]; then
     key_perms=$(stat -c '%a' "$AGE_IDENTITY" 2>/dev/null)
     if [[ "$key_perms" != "600" ]]; then
@@ -135,12 +139,11 @@ manifest_plain="${WORKDIR}/manifest.json"
 local_enc="${WORKDIR}/${ENC_NAME}"
 local_plain="${WORKDIR}/${ENC_NAME%.age}"
 
-# Track if restore succeeded (for cleanup decision)
-RESTORE_SUCCESS=false
-# Track if exit was due to signal (for partial file cleanup)
+# Tracks whether exit was due to signal (for partial-file cleanup)
 SIGNAL_EXIT=false
 
 # Cleanup function
+# shellcheck disable=SC2329
 cleanup() {
     local exit_code=$?
     
@@ -171,6 +174,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Signal handler for clean interruption
+# shellcheck disable=SC2329
 handle_signal() {
     SIGNAL_EXIT=true
     log "Interrupted by signal, cleaning up..."
@@ -350,7 +354,7 @@ if [[ "$local_plain" == *.vma* ]]; then
     log "Detected VM backup (vma format)"
     log "Restoring VM to ID $NEW_ID..."
     
-    # P1: Add rollback on restore failure
+    # Roll back partial VM creation on restore failure
     restore_exit=0
     if [[ -n "$STORAGE" ]]; then
         qmrestore "$local_plain" "$NEW_ID" --storage "$STORAGE" || restore_exit=$?
@@ -368,7 +372,7 @@ elif [[ "$local_plain" == *.tar* ]]; then
     log "Detected container backup (tar format)"
     log "Restoring CT to ID $NEW_ID..."
     
-    # P1: Add rollback on restore failure
+    # Roll back partial CT creation on restore failure
     restore_exit=0
     if [[ -n "$STORAGE" ]]; then
         pct restore "$NEW_ID" "$local_plain" --storage "$STORAGE" || restore_exit=$?
@@ -387,7 +391,6 @@ else
     exit 1
 fi
 
-RESTORE_SUCCESS=true
 log "=== Restore Completed Successfully ==="
 log "VM/CT $NEW_ID restored from backup"
 log "Original: VM $original_vmid from $original_host ($created_date)"

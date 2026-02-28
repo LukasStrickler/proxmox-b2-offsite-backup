@@ -76,7 +76,7 @@ fi
 mkdir -p "$WORKDIR"
 umask 077
 restore_dir=$(mktemp -d "${WORKDIR}/pve-hostcfg-restore-XXXXXX")
-trap 'rm -rf "$restore_dir"' EXIT
+trap '[[ -n "${restore_dir:-}" ]] && rm -rf "$restore_dir"' EXIT
 
 if [[ -z "$ENC_NAME" ]]; then
     echo "Finding latest hostconfig backup for $SEARCH_HOST..."
