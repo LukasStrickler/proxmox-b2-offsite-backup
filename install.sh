@@ -225,6 +225,7 @@ download_scripts() {
     local env_existed_before=false
     [[ -e "$env_dst" ]] && env_existed_before=true
     download_to_path "${REPO_RAW}/.env.example" "$env_dst"
+    track_installed_if_new "$env_dst" "$env_existed_before"
     
     info "  Downloading: etc/logrotate.d/pve-b2-age"
     local logrotate_dst="${INSTALL_DIR}/etc/logrotate.d/pve-b2-age"
@@ -382,6 +383,7 @@ generate_age_key() {
 # Rollback on failure
 rollback() {
     local exit_code=$?
+    trap - EXIT
     if [[ $exit_code -ne 0 ]]; then
         error "Installation failed (exit code: $exit_code). Rolling back..."
 
@@ -407,7 +409,7 @@ rollback() {
 
         error "Rollback complete. Check $LOG_FILE for details."
     fi
-    exit $exit_code
+    exit "$exit_code"
 }
 trap rollback EXIT
 

@@ -109,7 +109,6 @@ mkdir -p "$LOCK_DIR"
 chmod 700 "$LOCK_DIR"
 
 # Acquire lock - exit with distinct code if already running
-LOCK_EXIT_CODE=0  # Success by default
 exec 200>"${LOCK_DIR}/prune.lock"
 if ! flock -n 200; then
   log "Prune already running, exiting (skipped)"
@@ -195,7 +194,7 @@ delete_excess_per_vmid() {
   # Get all .age files with their modification times, normalized to epoch for correct sorting
   # Exclude manifest files (*.json.age) from retention pool - they're handled separately
   local all_files
-  if ! all_files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | select(.Name | endswith(".json.age") | not) | "\(.ModTime)|\(.Name)"'); then
+  if ! all_files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | select(.Name | endswith(".json.age") | not) | [.ModTime, .Name] | @tsv'); then
     log "  ERROR: Failed to parse file list from rclone output"
     ((ERRORS_OCCURRED++))
     return 1
@@ -207,15 +206,13 @@ delete_excess_per_vmid() {
   fi
   
   # Build associative array: vmid -> list of files with timestamps
-  # Use newline as delimiter instead of comma to handle filenames with special chars
   declare -A vmid_files
-  local line file vmid modtime
+  local file vmid modtime
   
-  while IFS='|' read -r modtime file; do
+  while IFS=$'\t' read -r modtime file; do
     [[ -z "$file" ]] && continue
     vmid=$(extract_vmid "$file")
-    # Use newline delimiter to avoid issues with commas in filenames
-    vmid_files["$vmid"]="${vmid_files["$vmid"]:-}${vmid_files["$vmid"]:+$'\n'}${modtime}|${file}"
+    vmid_files["$vmid"]="${vmid_files["$vmid"]:-}${vmid_files["$vmid"]:+$'\n'}${modtime}"$'\t'"${file}"
   done <<< "$all_files"
   
   # Process each VMID's files
@@ -232,9 +229,9 @@ delete_excess_per_vmid() {
     # Sort by ModTime normalized to epoch (newest first), then extract filenames
     # Using jq to parse ISO8601 timestamps to epoch for correct chronological sorting
     local sorted_files
-    sorted_files=$(echo "${vmid_files[$vmid]}" | jq -Rs 'split("\n") | map(select(length > 0) | split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 1) | .[1]' 2>/dev/null) || {
+    sorted_files=$(echo "${vmid_files[$vmid]}" | jq -Rs 'split("\n") | map(select(length > 0) | split("\t")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 1) | .[1]' 2>/dev/null) || {
       # Fallback to lexical sort if jq parsing fails (e.g., non-standard timestamps)
-      sorted_files=$(echo "${vmid_files[$vmid]}" | sort -t'|' -k1 -r | cut -d'|' -f2-)
+      sorted_files=$(echo "${vmid_files[$vmid]}" | sort -t$'\t' -k1,1r | cut -f2-)
     }
     
     local vm_total
@@ -319,14 +316,14 @@ delete_excess_global() {
   fi
   
   local files
-  if ! files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | "\(.ModTime)|\(.Name)"'); then
+  if ! files=$(echo "$files_json" | jq -r '.[] | select(.Name | endswith(".age")) | [.ModTime, .Name] | @tsv'); then
     log "  ERROR: Failed to parse file list from rclone output"
     ((ERRORS_OCCURRED++))
     return 1
   fi
   # Sort by ModTime normalized to epoch (newest first)
-  files=$(echo "$files" | jq -Rs 'split("\n") | map(select(length > 0) | split("|")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 1) | .[1]' 2>/dev/null) || {
-    files=$(echo "$files" | sort -t'|' -k1 -r | cut -d'|' -f2-)
+  files=$(echo "$files" | jq -Rs 'split("\n") | map(select(length > 0) | split("\t")) | sort_by(.[0] | fromdateiso8601? // 0) | reverse | .[] | select(length > 1) | .[1]' 2>/dev/null) || {
+    files=$(echo "$files" | sort -t$'\t' -k1,1r | cut -f2-)
   }
   
   if [[ -z "$files" ]]; then
