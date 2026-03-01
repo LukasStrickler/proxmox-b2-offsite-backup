@@ -4,6 +4,8 @@ Documentation=https://github.com/LukasStrickler/proxmox-b2-offsite-backup
 
 [Timer]
 OnCalendar=Sun *-*-* 07:00:00
+# Add jitter to prevent fleet-wide synchronized runs
+RandomizedDelaySec=20m
 Persistent=true
 
 [Install]

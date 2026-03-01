@@ -10,7 +10,7 @@ Get PVE B2 Age Backup running in 10 minutes.
 
 ## Step 1: Install
 
-The installer sets up scripts, config, systemd units, and dependencies (`rclone`, `age`, `jq`). When it generates encryption keys, **download and securely store them** (see Step 3) so you can restore backups later.
+The installer sets up scripts, config, systemd units, and dependencies (`rclone`, `age`, `jq`, `zstd`). When it generates encryption keys, **download and securely store them** (see Step 3) so you can restore backups later.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/LukasStrickler/proxmox-b2-offsite-backup/main/install.sh | sudo bash

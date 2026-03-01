@@ -74,10 +74,10 @@ sudo ./uninstall.sh
 
 | Requirement | Details |
 |:---|:---|
-| Proxmox VE | 7.x or 8.x (restore uses `qmrestore`, `pct`) |
+| Proxmox VE | 7.x, 8.x, or 9.x (restore uses `qmrestore`, `pct`) |
 | Local storage | Largest VM + ~10% for staging |
 | Backblaze B2 | Bucket + Application Key |
-| **Runtime dependencies** | **rclone**, **age**, **jq**, **zstd** — installed by install script if missing. **flock**, **sha256sum**, **tar** — from util-linux/coreutils (standard on Debian/Proxmox). **curl** — install-only. |
+| **Runtime dependencies** | **rclone**, **age**, **jq**, **zstd**, **sqlite3** — installed by install script if missing. **flock**, **sha256sum**, **tar** — from util-linux/coreutils (standard on Debian/Proxmox). **curl** — install-only. |
 
 ## Documentation
 

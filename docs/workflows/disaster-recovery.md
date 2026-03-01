@@ -41,7 +41,7 @@ Ensure you have access to:
 ### 1.2 Install Backup Tools
 ```bash
 # Install dependencies
-apt install -y rclone age jq curl git
+apt install -y rclone age jq curl git zstd
 
 # Verify installation
 rclone --version && age --version

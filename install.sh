@@ -131,7 +131,7 @@ check_dependencies() {
     info "Checking dependencies..."
     
     local missing=()
-    local deps=("rclone" "age" "jq" "curl" "zstd")
+    local deps=("rclone" "age" "jq" "curl" "zstd" "tar")
 
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" >/dev/null 2>&1; then
@@ -169,6 +169,7 @@ download_scripts() {
     mkdir -p "$INSTALL_DIR/scripts"
     mkdir -p "$INSTALL_DIR/systemd"
     mkdir -p "$INSTALL_DIR/lib"
+    mkdir -p "$INSTALL_DIR/etc/logrotate.d"
     
     local scripts=(
         "scripts/pve-b2-age-hook.sh"
@@ -225,6 +226,14 @@ download_scripts() {
     [[ -e "$env_dst" ]] && env_existed_before=true
     download_to_path "${REPO_RAW}/.env.example" "$env_dst"
     track_installed_if_new "$env_dst" "$env_existed_before"
+    
+    info "  Downloading: etc/logrotate.d/pve-b2-age"
+    local logrotate_dst="${INSTALL_DIR}/etc/logrotate.d/pve-b2-age"
+    local logrotate_existed_before=false
+    [[ -e "$logrotate_dst" ]] && logrotate_existed_before=true
+    download_to_path "${REPO_RAW}/etc/logrotate.d/pve-b2-age" "$logrotate_dst"
+    track_installed_if_new "$logrotate_dst" "$logrotate_existed_before"
+
 
     info "  Downloading: uninstall.sh"
     local uninstall_dst="${INSTALL_DIR}/uninstall.sh"
@@ -281,6 +290,19 @@ install_systemd() {
     
     systemctl daemon-reload
     log "Systemd daemon reloaded"
+}
+
+# Install logrotate config
+install_logrotate() {
+    info "Installing logrotate config..."
+    
+    local src="${INSTALL_DIR}/etc/logrotate.d/pve-b2-age"
+    local dst="/etc/logrotate.d/pve-b2-age"
+    
+    if [[ -f "$src" ]]; then
+        install_to_path 644 "$src" "$dst"
+        log "  Installed: /etc/logrotate.d/pve-b2-age"
+    fi
 }
 
 # Setup configuration directory
@@ -362,6 +384,7 @@ generate_age_key() {
 # Rollback on failure
 rollback() {
     local exit_code=$?
+    trap - EXIT
     if [[ $exit_code -ne 0 ]]; then
         error "Installation failed (exit code: $exit_code). Rolling back..."
 
@@ -387,7 +410,7 @@ rollback() {
 
         error "Rollback complete. Check $LOG_FILE for details."
     fi
-    exit $exit_code
+    exit "$exit_code"
 }
 trap rollback EXIT
 
@@ -495,6 +518,7 @@ main() {
     download_scripts
     install_scripts
     install_systemd
+    install_logrotate
     setup_config
     generate_age_key
     

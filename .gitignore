@@ -1,0 +1,5 @@
+.ada/
+
+# Test scripts (should not be committed)
+test*.sh
+

@@ -53,6 +53,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ -n "$HOST_FILTER" ]]; then
+    if [[ "$HOST_FILTER" == *"/"* || "$HOST_FILTER" == *".."* || ! "$HOST_FILTER" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo "ERROR: Invalid --host value: $HOST_FILTER" >&2
+        echo "  Host must match [A-Za-z0-9._-] and must not contain '/' or '..'" >&2
+        exit 1
+    fi
+fi
+
 load_config || exit 1
 validate_config "RCLONE_REMOTE" "AGE_IDENTITY" || exit 1
 
@@ -61,22 +69,30 @@ SEARCH_HOST="${HOST_FILTER:-$HOST}"
 REMOTE_BASE="${RCLONE_REMOTE}/${REMOTE_PREFIX:-proxmox}/${SEARCH_HOST}"
 REMOTE_HOSTCFG="${REMOTE_BASE}/hostconfig"
 WORKDIR="${WORKDIR:-/var/tmp}"
+EXTRACT_ALLOWED_BASES="${EXTRACT_ALLOWED_BASES:-/var/tmp:/tmp}"
 LOG="${LOG:-/var/log/pve-b2-age.log}"
 
 need rclone
 need age
 need jq
 need tar
+need realpath
 
 if [[ ! -f "$AGE_IDENTITY" ]]; then
     log "ERROR: Age identity file not found: $AGE_IDENTITY"
     exit 1
 fi
 
+validate_path_safe "$WORKDIR" "WORKDIR" || exit 1
+if [[ "$WORKDIR" == "/" ]]; then
+    echo "ERROR: WORKDIR must not be '/'" >&2
+    exit 1
+fi
+
 mkdir -p "$WORKDIR"
 umask 077
 restore_dir=$(mktemp -d "${WORKDIR}/pve-hostcfg-restore-XXXXXX")
-trap 'rm -rf "$restore_dir"' EXIT
+trap '[[ -n "${restore_dir:-}" ]] && rm -rf "$restore_dir"' EXIT
 
 if [[ -z "$ENC_NAME" ]]; then
     echo "Finding latest hostconfig backup for $SEARCH_HOST..."
@@ -114,6 +130,26 @@ echo "Decrypted host config backup: $local_plain"
 
 if [[ -n "$EXTRACT_TO" ]]; then
     validate_path_safe "$EXTRACT_TO" "extract path" || exit 1
+    extract_realpath=$(realpath -m "$EXTRACT_TO")
+
+    extract_allowed=false
+    IFS=':' read -r -a allowed_bases <<< "$EXTRACT_ALLOWED_BASES"
+
+    for base in "${allowed_bases[@]}"; do
+        [[ -n "$base" ]] || continue
+        base_realpath=$(realpath -m "$base")
+        if [[ "$extract_realpath" == "$base_realpath"/* ]]; then
+            extract_allowed=true
+            break
+        fi
+    done
+
+    if [[ "$extract_allowed" != "true" ]]; then
+        echo "ERROR: --extract-to must be under an allowed base path: $EXTRACT_ALLOWED_BASES" >&2
+        echo "  Got: $EXTRACT_TO" >&2
+        exit 1
+    fi
+
     mkdir -p "$EXTRACT_TO"
     echo "Extracting to $EXTRACT_TO..."
     tar -xaf "$local_plain" -C "$EXTRACT_TO"

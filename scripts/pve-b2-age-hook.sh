@@ -43,6 +43,7 @@ need rclone
 need flock
 need sha256sum
 need jq
+need realpath
 
 # Create dedicated lock directory (root-only)
 LOCK_DIR="/run/pve-b2-age"
@@ -57,15 +58,91 @@ if ! flock -w 300 200; then
     exit 1
 fi
 
+# In-flight marker file for TOCTOU-safe staging check
+# This prevents race conditions where two jobs both pass the staging check
+# before either creates a dump file
+# Marker format: VMID:PID:TIMESTAMP for stale detection
+INFLIGHT_MARKER="${LOCK_DIR}/inflight"
+
+# Stale marker timeout (6 hours - longer than any reasonable backup)
+STALE_MARKER_SECS=21600
+
 # At backup-start: ensure staging has no other backup file (only one backup at a time).
 # This protects limited staging (e.g. 100GB) when backing up many large VMs (e.g. 8x80GB).
 # Space is only freed after upload in backup-end; overlapping jobs would fill the disk.
 # Set ALLOW_CONCURRENT_STAGING=true in config to disable (only if staging is large enough).
 staging_busy() {
     [[ "${ALLOW_CONCURRENT_STAGING:-false}" == "true" ]] && return 1
+    
+    # First check: is there an in-flight marker from another job?
+    if [[ -f "$INFLIGHT_MARKER" ]]; then
+        # Parse marker for PID and timestamp to detect stale markers
+        local marker_content marker_vmid marker_pid marker_ts
+        marker_content=$(cat "$INFLIGHT_MARKER" 2>/dev/null || echo "unknown")
+        
+        # Check for new format (VMID:PID:TIMESTAMP) vs old format (just VMID)
+        if [[ "$marker_content" =~ ^([0-9]+):([0-9]+):([0-9]+)$ ]]; then
+            marker_vmid="${BASH_REMATCH[1]}"
+            marker_pid="${BASH_REMATCH[2]}"
+            marker_ts="${BASH_REMATCH[3]}"
+            
+            # Calculate marker age first (needed for both cases)
+            local now age
+            now=$(date +%s)
+            age=$((now - marker_ts))
+            
+            # Check if process is still running
+            if ! kill -0 "$marker_pid" 2>/dev/null; then
+                # Process died, check if marker is old enough to be stale
+                if (( age > STALE_MARKER_SECS )); then
+                    log "WARNING: Removing stale inflight marker (PID $marker_pid dead, age ${age}s)"
+                    rm -f "$INFLIGHT_MARKER" 2>/dev/null || true
+                    # Continue to next check
+                else
+                    log "ERROR: Staging busy — backup job for VMID $marker_vmid has dead PID $marker_pid but marker is recent (${age}s old)"
+                    log "  Hint: If this is wrong, manually remove: $INFLIGHT_MARKER"
+                    return 0
+                fi
+            else
+                # PID is alive, but also check age to handle PID reuse
+                # A very old marker with a live PID could indicate PID was reused
+                if (( age > STALE_MARKER_SECS )); then
+                    log "WARNING: Live PID $marker_pid but marker is very old (${age}s), possible PID reuse - removing stale marker"
+                    rm -f "$INFLIGHT_MARKER" 2>/dev/null || true
+                    # Continue to next check
+                else
+                    log "ERROR: Staging busy — backup job for VMID $marker_vmid is in progress (PID $marker_pid, age ${age}s)"
+                    return 0
+                fi
+            fi
+        else
+            # Old format marker - just VMID, no PID/timestamp
+            log "ERROR: Staging busy — backup job for VMID $marker_content is in progress (legacy marker)"
+            log "  Hint: If stale, manually remove: $INFLIGHT_MARKER"
+            return 0
+        fi
+    fi
+    
+    # Second check: are there existing dump files?
     local count
     count=$(find "$DUMPDIR" -maxdepth 1 -type f \( -name 'vzdump-qemu-*' -o -name 'vzdump-lxc-*' \) 2>/dev/null | wc -l)
-    [[ "$count" -gt 0 ]]
+    if [[ "$count" -gt 0 ]]; then
+        log "ERROR: Staging busy — $count backup file(s) already in $DUMPDIR (upload in progress or leftover)"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Set in-flight marker (called at backup-start)
+# Include PID and timestamp for stale detection
+set_inflight() {
+    echo "${VMID}:$$:$(date +%s)" > "$INFLIGHT_MARKER"
+}
+
+# Clear in-flight marker (called at backup-end or backup-abort)
+clear_inflight() {
+    rm -f "$INFLIGHT_MARKER" 2>/dev/null || true
 }
 
 upload_encrypted_stream() {
@@ -92,15 +169,15 @@ upload_encrypted_stream() {
     while true; do
         log "Upload attempt $attempt/$max_attempts: $filename"
         
+        # Use single retry layer (outer backoff) - rclone uses --retries 1 to avoid nested retries
+        # This prevents excessive blocking when network issues occur
         if age -R "$AGE_RECIPIENTS" "$src_file" 2>>"$LOG" | \
            rclone rcat \
                --fast-list \
                --streaming-upload-cutoff "${RCAT_CUTOFF:-8M}" \
                --transfers 4 \
                --checkers 8 \
-               --retries 5 \
-               --retries-sleep 10s \
-               --low-level-retries 15 \
+               --retries 1 \
                --timeout 5m \
                --contimeout 1m \
                "$sanitized_remote" >>"$LOG" 2>&1; then
@@ -123,9 +200,13 @@ main() {
     case "$PHASE" in
         backup-start)
             if staging_busy; then
-                log "ERROR: Staging busy — another backup file already in $DUMPDIR (upload in progress or leftover). Only one backup at a time; schedule jobs so the next starts after the previous has finished and space is freed."
+                log "ERROR: Only one backup at a time; schedule jobs so the next starts after the previous has finished and space is freed."
                 exit 1
             fi
+            # Clear in-flight marker on signal interruption (SIGTERM/SIGINT)
+            trap 'clear_inflight; exit 130' INT TERM
+            # Set in-flight marker to prevent TOCTOU race
+            set_inflight
             log "Backup started for VM/CT $VMID"
             ;;
             
@@ -134,8 +215,30 @@ main() {
             SRC="${TARGET:-${TARFILE:-}}"
             if [[ -z "$SRC" || ! -f "$SRC" ]]; then
                 log "ERROR: TARGET/TARFILE missing or not a file: '${SRC:-<unset>}'"
+                clear_inflight
                 exit 1
             fi
+            
+            # Validate source file is under DUMPDIR (prevent path traversal)
+            local src_realpath dumpdir_realpath
+            if ! src_realpath=$(realpath -m "$SRC" 2>/dev/null); then
+                log "ERROR: Cannot resolve source file path: $SRC"
+                clear_inflight
+                exit 1
+            fi
+            if ! dumpdir_realpath=$(realpath -m "$DUMPDIR" 2>/dev/null); then
+                log "ERROR: Cannot resolve DUMPDIR path: $DUMPDIR"
+                clear_inflight
+                exit 1
+            fi
+            if [[ "$src_realpath" != "$dumpdir_realpath"/* ]]; then
+                log "ERROR: Source file must be under DUMPDIR: $SRC"
+                clear_inflight
+                exit 1
+            fi
+            
+            # Ensure in-flight marker is cleared on any unexpected exit (set -e failures)
+            trap clear_inflight EXIT
             
             local base_filename
             base_filename=$(basename "$SRC")
@@ -151,7 +254,7 @@ main() {
             local manifest_temp
             manifest_temp=$(mktemp)
             # shellcheck disable=SC2064
-            trap "rm -f '$manifest_temp'" EXIT
+            trap 'clear_inflight; rm -f "$manifest_temp"' EXIT
             
             jq -n \
                 --arg vmid "$VMID" \
@@ -171,14 +274,13 @@ main() {
                 log "Backup upload successful: $base_filename"
                 
                 # Upload manifest
-                local manifest_ok=false
                 if upload_encrypted_stream "$manifest_temp" "$manifest_object"; then
                     log "Manifest upload successful"
-                    manifest_ok=true
                 else
                     log "ERROR: Manifest upload failed"
                     log "WARNING: Keeping local plaintext: $SRC"
                     log "WARNING: Re-run backup or manually delete after verifying remote backup"
+                    clear_inflight
                     exit 1
                 fi
                 
@@ -199,8 +301,12 @@ main() {
                             log "Monthly manifest copy created"
                         else
                             log "ERROR: Monthly manifest copy failed, deleting inconsistent monthly backup copy"
-                            if ! rclone delete "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1; then
-                                log "WARN: Failed to delete inconsistent monthly backup copy: $monthly_object"
+                            # Use deletefile instead of delete for single-object removal (safer)
+                            if ! rclone deletefile --b2-hard-delete "$(sanitize_path "$monthly_object")" >>"$LOG" 2>&1; then
+                                log "ERROR: Failed to delete inconsistent monthly backup copy: $monthly_object"
+                                log "WARNING: Monthly backup is in inconsistent state - manual cleanup required"
+                                clear_inflight
+                                exit 1
                             fi
                         fi
                     else
@@ -208,9 +314,12 @@ main() {
                     fi
                 fi
                 
+                # Clear in-flight marker on success
+                clear_inflight
                 log "Backup completed successfully for VM/CT $VMID"
             else
                 log "ERROR: Upload failed, keeping local plaintext: $SRC"
+                clear_inflight
                 exit 1
             fi
             ;;
@@ -219,28 +328,52 @@ main() {
             # LOGFILE exists only at log-end
             LF="${LOGFILE:-}"
             if [[ -n "$LF" && -f "$LF" ]]; then
-                local log_basename
-                log_basename=$(basename "$LF")
-                local log_object="${REMOTE_LOGS}/${log_basename}.age"
-                log "Uploading vzdump log: $log_basename"
-                upload_encrypted_stream "$LF" "$log_object" || log "WARN: Log upload failed"
+                local lf_realpath varlog_realpath dumpdir_realpath
+                local upload_logfile=true
+                if ! lf_realpath=$(realpath -m "$LF" 2>/dev/null); then
+                    log "WARN: Could not resolve LOGFILE path, skipping upload: $LF"
+                    upload_logfile=false
+                fi
+                if ! varlog_realpath=$(realpath -m "/var/log" 2>/dev/null); then
+                    varlog_realpath="/var/log"
+                fi
+                if ! dumpdir_realpath=$(realpath -m "$DUMPDIR" 2>/dev/null); then
+                    dumpdir_realpath=""
+                fi
+                if [[ "$upload_logfile" == "true" && "$lf_realpath" != "$varlog_realpath"/* && ( -z "$dumpdir_realpath" || "$lf_realpath" != "$dumpdir_realpath"/* ) ]]; then
+                    log "WARN: Skipping log upload for disallowed LOGFILE path: $LF"
+                    upload_logfile=false
+                fi
+
+                if [[ "$upload_logfile" == "true" ]]; then
+                    local log_basename
+                    log_basename=$(basename "$LF")
+                    local log_object="${REMOTE_LOGS}/${log_basename}.age"
+                    log "Uploading vzdump log: $log_basename"
+                    upload_encrypted_stream "$LF" "$log_object" || log "WARN: Log upload failed"
+                fi
             fi
             ;;
             
         backup-abort)
             log "Backup aborted for VM/CT $VMID"
-            if [[ -n "$VMID" && -n "${DUMPDIR:-}" ]]; then
+            clear_inflight
+            # Validate VMID is numeric before cleanup to prevent accidental deletion
+            if [[ -n "$VMID" && "$VMID" =~ ^[0-9]+$ && -n "${DUMPDIR:-}" ]]; then
                 shopt -s nullglob
                 for f in "$DUMPDIR"/vzdump-*"-$VMID-"*; do
                     log "Cleaning up aborted staging file: $f"
                     rm -f "$f" 2>/dev/null || true
                 done
                 shopt -u nullglob
+            elif [[ -n "$VMID" && ! "$VMID" =~ ^[0-9]+$ ]]; then
+                log "WARNING: VMID not numeric, skipping cleanup: $VMID"
             fi
             ;;
             
         *)
             log "WARNING: Unknown phase: $PHASE (may indicate Proxmox version incompatibility)"
+            # Unknown phases are non-fatal - Proxmox may add new phases in future versions
             ;;
     esac
 }
